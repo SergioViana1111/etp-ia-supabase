@@ -2,29 +2,35 @@ import os
 import io
 import tempfile
 from datetime import datetime
+from urllib.parse import quote
 
+import requests
 import streamlit as st
 from docx import Document
 from openai import OpenAI
 from supabase import create_client, Client
 import pypandoc
 
-# -----------------------
-# CONFIGURAÇÕES GERAIS
-# -----------------------
+# =====================================================
+# CONFIGURAÇÕES GERAIS / INTEGRAÇÕES
+# =====================================================
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+APP_BASE_URL = os.getenv("APP_BASE_URL")  # ex.: https://seu-app.streamlit.app
 
-# Inicialização do Supabase (mantida)
 if not SUPABASE_URL or not SUPABASE_KEY:
-    # No desenvolvimento local, evitamos quebrar o app de cara
-    st.warning("SUPABASE_URL e SUPABASE_KEY não estão configuradas. Defina-as em secrets ou variáveis de ambiente.")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+    st.warning(
+        "SUPABASE_URL e/ou SUPABASE_KEY não estão configuradas. "
+        "Defina-as nos secrets do Streamlit (ou .streamlit/secrets.toml)."
+    )
+    supabase: Client | None = None
+else:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# -----------------------
-# DEFINIÇÃO DAS ETAPAS (mantidas)
-# -----------------------
+# =====================================================
+# DEFINIÇÃO DAS ETAPAS
+# =====================================================
 
 ETAPAS = [
     (1, "Ajuste da Descrição da Necessidade de Contratação"),
@@ -64,12 +70,13 @@ INFOS_BASICAS_CAMPOS = [
     ("objeto", "Objeto da Contratação (resumo)"),
 ]
 
-# -----------------------
-# FUNÇÕES DE BANCO (SUPABASE) (mantidas)
-# -----------------------
+# =====================================================
+# FUNÇÕES DE BANCO (SUPABASE)
+# =====================================================
 
 def _check_db():
     if supabase is None:
+        st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
         st.error("Banco (Supabase) não configurado. Defina SUPABASE_URL e SUPABASE_KEY.")
         st.stop()
 
@@ -195,9 +202,109 @@ def carregar_textos_todas_etapas(projeto_id: int):
     )
     return resp.data or []
 
-# -----------------------
-# IA (GPT-5 via Responses API) (mantidas)
-# -----------------------
+# =====================================================
+# USUÁRIOS (LOGIN REAL COM GOOGLE via SUPABASE AUTH)
+# =====================================================
+
+def obter_usuario_por_email(email: str):
+    _check_db()
+    resp = (
+        supabase.table("usuarios")
+        .select("*")
+        .eq("email", email)
+        .limit(1)
+        .execute()
+    )
+    data = resp.data or []
+    return data[0] if data else None
+
+def criar_usuario(nome: str, sobrenome: str, cpf: str, email: str):
+    _check_db()
+    resp = supabase.table("usuarios").insert(
+        {
+            "nome": nome,
+            "sobrenome": sobrenome,
+            "cpf": cpf,
+            "email": email,
+        }
+    ).execute()
+    return resp.data[0]
+
+def gerar_google_auth_url():
+    """Monta a URL de login do Supabase com Google."""
+    if not SUPABASE_URL:
+        return "#"
+
+    if not APP_BASE_URL:
+        redirect = "http://localhost:8501"
+    else:
+        redirect = APP_BASE_URL
+
+    redirect_enc = quote(redirect, safe="")
+    return f"{SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to={redirect_enc}"
+
+def obter_user_supabase(access_token: str):
+    """Consulta a API Auth do Supabase para pegar dados do usuário logado."""
+    if not access_token or not SUPABASE_URL:
+        return None
+
+    try:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {access_token}",
+        }
+        resp = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        return None
+
+    return None
+
+def sincronizar_usuario(user_json: dict):
+    """
+    Recebe o JSON retornado pelo /auth/v1/user,
+    extrai nome/email e garante um registro em 'usuarios'.
+    """
+    if not user_json:
+        return None
+
+    email = user_json.get("email")
+    meta = user_json.get("user_metadata") or {}
+    nome_completo = meta.get("full_name") or meta.get("name") or ""
+    partes = nome_completo.split(" ", 1)
+    nome = partes[0] if partes else ""
+    sobrenome = partes[1] if len(partes) > 1 else ""
+
+    cpf = ""  # pode ser preenchido depois, se quiser
+
+    existente = obter_usuario_por_email(email) if email else None
+    if existente:
+        return existente
+    return criar_usuario(nome, sobrenome, cpf, email)
+
+def tela_login_google():
+    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
+
+    st.title("Ferramenta Inteligente para Elaboração de ETP")
+    st.subheader("Acesse com sua conta Google")
+
+    st.write(
+        "Para usar a ferramenta, faça login com sua conta Google. "
+        "O processo é seguro e realizado via Supabase Auth."
+    )
+
+    auth_url = gerar_google_auth_url()
+    st.link_button("🔐 Entrar com Google", auth_url)
+
+    st.caption(
+        "Ao clicar em \"Entrar com Google\", você será redirecionado para a página oficial "
+        "do Google para login/autorização e, em seguida, voltará para esta aplicação."
+    )
+
+# =====================================================
+# IA (GPT-5 via Responses API)
+# =====================================================
 
 def gerar_texto_ia(
     numero_etapa: int,
@@ -287,9 +394,9 @@ Não repita os títulos das seções da lei, apenas produza o texto final pronto
     except Exception as e:
         return f"⚠️ Erro ao chamar a IA: {e}"
 
-# -----------------------
-# EXPORTAÇÃO DOCX / PDF (mantidas)
-# -----------------------
+# =====================================================
+# EXPORTAÇÃO DOCX / PDF
+# =====================================================
 
 def gerar_docx_etp(projeto, etapas_rows):
     doc = Document()
@@ -316,9 +423,8 @@ def gerar_docx_etp(projeto, etapas_rows):
     return buffer
 
 def gerar_pdf_etp(projeto, etapas_rows):
-    """Gera PDF a partir de um DOCX usando pypandoc.
-    Se não for possível, retorna (None, mensagem_erro).
-    """
+    """Gera PDF a partir de um DOCX usando pandoc + wkhtmltopdf.
+    Retorna (buffer_pdf, erro_str)."""
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             docx_path = os.path.join(tmpdir, "etp_temp.docx")
@@ -328,19 +434,12 @@ def gerar_pdf_etp(projeto, etapas_rows):
             with open(docx_path, "wb") as f:
                 f.write(docx_buffer.getbuffer())
 
-            try:
-                pypandoc.convert_file(
-                    docx_path,
-                    "pdf",
-                    outputfile=pdf_path,
-                    extra_args=["--pdf-engine=wkhtmltopdf"],
-                )
-            except Exception:
-                pypandoc.convert_file(
-                    docx_path,
-                    "pdf",
-                    outputfile=pdf_path,
-                )
+            pypandoc.convert_file(
+                docx_path,
+                "pdf",
+                outputfile=pdf_path,
+                extra_args=["--pdf-engine=wkhtmltopdf"],
+            )
 
             with open(pdf_path, "rb") as f:
                 pdf_bytes = f.read()
@@ -351,18 +450,58 @@ def gerar_pdf_etp(projeto, etapas_rows):
     except Exception as e:
         return None, str(e)
 
-# -----------------------
+# =====================================================
 # INTERFACE STREAMLIT
-# -----------------------
+# =====================================================
 
-def app_content():
-    """Contém toda a lógica principal do aplicativo (após o login)."""
+def main():
+    # Supabase precisa estar configurado
+    if supabase is None:
+        st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
+        st.error("SUPABASE_URL e SUPABASE_KEY não estão configuradas.")
+        return
+
+    # Autenticação com Google via Supabase
+    if "usuario" not in st.session_state:
+        params = st.experimental_get_query_params()
+        access_tokens = params.get("access_token")
+
+        if access_tokens:
+            access_token = access_tokens[0]
+            user_json = obter_user_supabase(access_token)
+            usuario = sincronizar_usuario(user_json)
+
+            if usuario:
+                st.session_state["usuario"] = usuario
+                st.experimental_set_query_params()
+            else:
+                st.warning("Não foi possível validar o login. Tente novamente.")
+                st.experimental_set_query_params()
+                tela_login_google()
+                return
+        else:
+            tela_login_google()
+            return
+
+    usuario = st.session_state["usuario"]
+
+    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
 
     st.title("Ferramenta Inteligente para Elaboração de ETP")
 
+    # Info do usuário logado na sidebar
+    st.sidebar.markdown(
+        f"**Usuário:** {usuario.get('nome','')} {usuario.get('sobrenome','')}"
+    )
+    st.sidebar.markdown(f"*E-mail:* {usuario.get('email','')}")
+    if st.sidebar.button("Sair"):
+        st.session_state.clear()
+        st.experimental_set_query_params()
+        st.rerun()
+
     st.sidebar.header("Projetos de ETP")
 
-    # ----- Seleção / criação de projeto -----
+    # Seleção / criação de projeto
     projetos = listar_projetos()
     options = ["(Novo projeto)"] + [f"{p['id']} - {p['nome']}" for p in projetos]
     escolha = st.sidebar.selectbox("Selecione o projeto", options)
@@ -382,7 +521,7 @@ def app_content():
 
     projeto = obter_projeto(projeto_id)
 
-    # ----- Gerenciar projeto (excluir) -----
+    # Gerenciar projeto (excluir)
     if escolha != "(Novo projeto)":
         st.sidebar.markdown("### Gerenciar projeto")
         confirmar = st.sidebar.checkbox("Confirmar exclusão permanente", key="confirmar_exclusao")
@@ -394,7 +533,7 @@ def app_content():
             else:
                 st.sidebar.warning("Marque a caixa de confirmação antes de excluir.")
 
-    # ----- Seleção de etapa -----
+    # Seleção de etapa
     st.sidebar.markdown("---")
     numero_etapa = st.sidebar.selectbox(
         "Etapa",
@@ -404,7 +543,7 @@ def app_content():
     nome_etapa = dict(ETAPAS)[numero_etapa]
     orientacao = ORIENTACOES.get(numero_etapa, "")
 
-    # ----- Status da IA -----
+    # Status da IA
     st.sidebar.markdown("---")
     st.sidebar.caption("Status da IA:")
     if os.getenv("OPENAI_API_KEY"):
@@ -414,9 +553,7 @@ def app_content():
 
     col1, col2 = st.columns([1.2, 2.0])
 
-    # =====================================================================
     # COLUNA ESQUERDA: INFOS BÁSICAS + ARQUIVOS
-    # =====================================================================
     with col1:
         st.subheader("Informações básicas do projeto")
 
@@ -449,9 +586,7 @@ def app_content():
         else:
             st.caption("Nenhum arquivo cadastrado ainda para esta etapa.")
 
-    # =====================================================================
     # COLUNA DIREITA: IA + TEXTO FINAL DA ETAPA
-    # =====================================================================
     with col2:
         st.subheader(f"Etapa {numero_etapa} de {len(ETAPAS)} – {nome_etapa}")
 
@@ -492,14 +627,14 @@ def app_content():
             )
             st.session_state[key_sug] = sugestao
 
-        sugestao_ia = st.text_area(
+        st.text_area(
             "Sugestão da IA (você pode editar ou aproveitar partes)",
             height=200,
             key=key_sug,
         )
 
         st.markdown("#### Texto final da etapa")
-        texto_final = st.text_area(
+        st.text_area(
             "Texto final que será usado no documento do ETP",
             height=300,
             key=key_txt,
@@ -515,9 +650,7 @@ def app_content():
             )
             st.success("Etapa salva com sucesso!")
 
-    # =====================================================================
     # EXPORTAÇÃO DOCX + PDF
-    # =====================================================================
     st.markdown("---")
     st.subheader("Exportar ETP completo")
 
@@ -554,56 +687,6 @@ def app_content():
                     file_name=f"etp_projeto_{projeto_id}.pdf",
                     mime="application/pdf",
                 )
-
-
-def login_screen():
-    """Implementa a tela de login/cadastro simples baseada na imagem."""
-    
-    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
-    
-    st.title("Ferramenta Inteligente para Elaboração de ETP")
-    st.markdown("---")
-
-    col_vazio, col_login, col_vazio2 = st.columns([1, 1, 1])
-
-    with col_login:
-        st.subheader("🔐 Login ou Cadastro")
-        
-        # Campos de cadastro/login
-        st.text_input("Nome:", key="login_nome")
-        st.text_input("Sobrenome:", key="login_sobrenome")
-        st.text_input("CPF (somente números):", key="login_cpf", max_chars=11)
-        st.text_input("Email:", key="login_email")
-        st.text_input("Senha:", type="password", key="login_senha")
-        
-        st.markdown("*Ou*")
-        
-        # Botão de Login com Google (Simulado)
-        # Em uma implementação real com Supabase, seria um redirect
-        st.button("🌐 Login com Google", key="btn_google")
-        
-        st.markdown("---")
-        
-        # Botão principal para simular o login/cadastro e avançar
-        if st.button("Entrar / Cadastrar", type="primary"):
-            # Lógica de login/cadastro simulada
-            # Em uma aplicação real, você faria a autenticação aqui (e.g., Supabase, OAuth)
-            st.session_state["logged_in"] = True
-            st.session_state["user_name"] = st.session_state.get("login_nome", "Usuário")
-            st.rerun()
-
-def main():
-    """Função principal que gerencia o estado de login."""
-    
-    # Inicializa o estado de login se não existir
-    if "logged_in" not in st.session_state:
-        st.session_state["logged_in"] = False
-        st.session_state["user_name"] = "Convidado"
-
-    if st.session_state["logged_in"]:
-        app_content()
-    else:
-        login_screen()
 
 if __name__ == "__main__":
     main()
