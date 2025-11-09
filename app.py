@@ -16,14 +16,14 @@ import pypandoc
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# No Streamlit Cloud, defina em secrets.toml
+# Inicialização do Supabase (mantida)
 if not SUPABASE_URL or not SUPABASE_KEY:
     # No desenvolvimento local, evitamos quebrar o app de cara
     st.warning("SUPABASE_URL e SUPABASE_KEY não estão configuradas. Defina-as em secrets ou variáveis de ambiente.")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 # -----------------------
-# DEFINIÇÃO DAS ETAPAS
+# DEFINIÇÃO DAS ETAPAS (mantidas)
 # -----------------------
 
 ETAPAS = [
@@ -65,7 +65,7 @@ INFOS_BASICAS_CAMPOS = [
 ]
 
 # -----------------------
-# FUNÇÕES DE BANCO (SUPABASE)
+# FUNÇÕES DE BANCO (SUPABASE) (mantidas)
 # -----------------------
 
 def _check_db():
@@ -196,7 +196,7 @@ def carregar_textos_todas_etapas(projeto_id: int):
     return resp.data or []
 
 # -----------------------
-# IA (GPT-5 via Responses API)
+# IA (GPT-5 via Responses API) (mantidas)
 # -----------------------
 
 def gerar_texto_ia(
@@ -288,7 +288,7 @@ Não repita os títulos das seções da lei, apenas produza o texto final pronto
         return f"⚠️ Erro ao chamar a IA: {e}"
 
 # -----------------------
-# EXPORTAÇÃO DOCX / PDF
+# EXPORTAÇÃO DOCX / PDF (mantidas)
 # -----------------------
 
 def gerar_docx_etp(projeto, etapas_rows):
@@ -355,8 +355,8 @@ def gerar_pdf_etp(projeto, etapas_rows):
 # INTERFACE STREAMLIT
 # -----------------------
 
-def main():
-    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
+def app_content():
+    """Contém toda a lógica principal do aplicativo (após o login)."""
 
     st.title("Ferramenta Inteligente para Elaboração de ETP")
 
@@ -554,6 +554,56 @@ def main():
                     file_name=f"etp_projeto_{projeto_id}.pdf",
                     mime="application/pdf",
                 )
+
+
+def login_screen():
+    """Implementa a tela de login/cadastro simples baseada na imagem."""
+    
+    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
+    
+    st.title("Ferramenta Inteligente para Elaboração de ETP")
+    st.markdown("---")
+
+    col_vazio, col_login, col_vazio2 = st.columns([1, 1, 1])
+
+    with col_login:
+        st.subheader("🔐 Login ou Cadastro")
+        
+        # Campos de cadastro/login
+        st.text_input("Nome:", key="login_nome")
+        st.text_input("Sobrenome:", key="login_sobrenome")
+        st.text_input("CPF (somente números):", key="login_cpf", max_chars=11)
+        st.text_input("Email:", key="login_email")
+        st.text_input("Senha:", type="password", key="login_senha")
+        
+        st.markdown("*Ou*")
+        
+        # Botão de Login com Google (Simulado)
+        # Em uma implementação real com Supabase, seria um redirect
+        st.button("🌐 Login com Google", key="btn_google")
+        
+        st.markdown("---")
+        
+        # Botão principal para simular o login/cadastro e avançar
+        if st.button("Entrar / Cadastrar", type="primary"):
+            # Lógica de login/cadastro simulada
+            # Em uma aplicação real, você faria a autenticação aqui (e.g., Supabase, OAuth)
+            st.session_state["logged_in"] = True
+            st.session_state["user_name"] = st.session_state.get("login_nome", "Usuário")
+            st.rerun()
+
+def main():
+    """Função principal que gerencia o estado de login."""
+    
+    # Inicializa o estado de login se não existir
+    if "logged_in" not in st.session_state:
+        st.session_state["logged_in"] = False
+        st.session_state["user_name"] = "Convidado"
+
+    if st.session_state["logged_in"]:
+        app_content()
+    else:
+        login_screen()
 
 if __name__ == "__main__":
     main()
