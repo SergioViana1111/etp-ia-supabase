@@ -302,6 +302,29 @@ def tela_login_google():
         "do Google para login/autorização e, em seguida, voltará para esta aplicação."
     )
 
+
+def mover_access_token_do_hash_para_query():
+    """
+    Se o Supabase retornar #access_token=..., esta função (via JS)
+    transforma em ?access_token=... e recarrega a página.
+    """
+    script = """
+    <script>
+    (function() {
+        if (window.location.hash && window.location.hash.includes("access_token=")) {
+            const params = new URLSearchParams(window.location.hash.substring(1));
+            const access = params.get("access_token");
+            if (access) {
+                const newUrl = window.location.origin + window.location.pathname + "?access_token=" + encodeURIComponent(access);
+                window.location.replace(newUrl);
+            }
+        }
+    })();
+    </script>
+    """
+    st.markdown(script, unsafe_allow_html=True)
+
+
 # =====================================================
 # IA (GPT-5 via Responses API)
 # =====================================================
@@ -460,6 +483,14 @@ def main():
         st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
         st.error("SUPABASE_URL e SUPABASE_KEY não estão configuradas.")
         return
+
+    # >>> NOVO: converte #access_token=... para ?access_token=...
+    mover_access_token_do_hash_para_query()
+
+    # Autenticação com Google via Supabase
+    if "usuario" not in st.session_state:
+        params = st.experimental_get_query_params()
+        access_tokens = params.get("access_token")
 
     # Autenticação com Google via Supabase
     if "usuario" not in st.session_state:
