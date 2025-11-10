@@ -284,23 +284,54 @@ def sincronizar_usuario(user_json: dict):
     return criar_usuario(nome, sobrenome, cpf, email)
 
 def tela_login_google():
-    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
+    st.set_page_config(page_title="Login – Ferramenta ETP", layout="wide")
 
     st.title("Ferramenta Inteligente para Elaboração de ETP")
     st.subheader("Acesse com sua conta Google")
-
     st.write(
         "Para usar a ferramenta, faça login com sua conta Google. "
         "O processo é seguro e realizado via Supabase Auth."
     )
 
-    auth_url = gerar_google_auth_url()
-    st.link_button("🔐 Entrar com Google", auth_url)
+    # === SCRIPT CRÍTICO PARA CONVERTER #access_token => ?access_token ===
+    script = """
+    <script>
+    (function() {
+        // se já tem hash com access_token, converte e recarrega
+        if (window.location.hash && window.location.hash.includes("access_token=")) {
+            const params = new URLSearchParams(window.location.hash.substring(1));
+            const access = params.get("access_token");
+            if (access) {
+                const newUrl = window.location.origin + window.location.pathname + "?access_token=" + encodeURIComponent(access);
+                window.location.replace(newUrl);
+                return;
+            }
+        }
+    })();
+    </script>
+    """
+    st.markdown(script, unsafe_allow_html=True)
 
-    st.caption(
-        "Ao clicar em \"Entrar com Google\", você será redirecionado para a página oficial "
-        "do Google para login/autorização e, em seguida, voltará para esta aplicação."
+    # === BOTÃO DE LOGIN GOOGLE ===
+    if st.button("🔐 Entrar com Google"):
+        redirect_url = st.experimental_get_query_params().get("redirect_to", [st.secrets.get("STREAMLIT_REDIRECT_URL", "")])[0]
+        if not redirect_url:
+            redirect_url = "https://etp-com-ia.streamlit.app"  # fallback
+
+        auth_url = f"{SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to={redirect_url}"
+        st.markdown(
+            f'<a href="{auth_url}" target="_self"><button style="font-size:16px;padding:10px 20px;">Entrar com Google</button></a>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        """
+        <small>Ao clicar em "Entrar com Google", você será redirecionado para a página oficial do Google
+        para login/autorização e, em seguida, voltará para esta aplicação.</small>
+        """,
+        unsafe_allow_html=True,
     )
+
 
 
 def mover_access_token_do_hash_para_query():
