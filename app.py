@@ -492,11 +492,6 @@ def main():
         params = st.experimental_get_query_params()
         access_tokens = params.get("access_token")
 
-    # Autenticação com Google via Supabase
-    if "usuario" not in st.session_state:
-        params = st.experimental_get_query_params()
-        access_tokens = params.get("access_token")
-
         if access_tokens:
             access_token = access_tokens[0]
             user_json = obter_user_supabase(access_token)
@@ -504,6 +499,7 @@ def main():
 
             if usuario:
                 st.session_state["usuario"] = usuario
+                # limpa a query string pra não ficar mostrando o token
                 st.experimental_set_query_params()
             else:
                 st.warning("Não foi possível validar o login. Tente novamente.")
@@ -511,9 +507,11 @@ def main():
                 tela_login_google()
                 return
         else:
+            # não tem token na URL e não há usuário em sessão → mostra tela de login
             tela_login_google()
             return
 
+    # daqui pra baixo você já TEM usuário logado
     usuario = st.session_state["usuario"]
 
     st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
@@ -531,6 +529,7 @@ def main():
         st.rerun()
 
     st.sidebar.header("Projetos de ETP")
+
 
     # Seleção / criação de projeto
     projetos = listar_projetos()
