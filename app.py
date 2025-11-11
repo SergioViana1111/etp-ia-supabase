@@ -489,20 +489,24 @@ def gerar_pdf_etp(projeto, etapas_rows):
 # =====================================================
 
 def main():
-    # Supabase precisa estar configurado
+    # Config da página – PRIMEIRA chamada do Streamlit
+    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
+
+    # Se Supabase não está configurado, mostra erro e para
     if supabase is None:
-        st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
         st.error("SUPABASE_URL e SUPABASE_KEY não estão configuradas.")
         return
 
-    
+    # 1) Sempre que a página carrega, tenta converter #access_token em ?access_token
+    mover_access_token_do_hash_para_query()
 
-    # Autenticação com Google via Supabase
+    # 2) Autenticação com Google via Supabase
     if "usuario" not in st.session_state:
         params = st.experimental_get_query_params()
         access_tokens = params.get("access_token")
 
         if access_tokens:
+            # Veio com ?access_token=...
             access_token = access_tokens[0]
             user_json = obter_user_supabase(access_token)
             usuario = sincronizar_usuario(user_json)
@@ -517,17 +521,12 @@ def main():
                 tela_login_google()
                 return
         else:
-            # não tem token na URL e não há usuário em sessão → mostra tela de login
+            # não tem token na URL e não tem usuário em sessão → tela de login
             tela_login_google()
             return
 
-    # daqui pra baixo você já TEM usuário logado
+    # 3) Daqui pra baixo JÁ TEM usuário logado
     usuario = st.session_state["usuario"]
-
-    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
-
-    # >>> NOVO: converte #access_token=... para ?access_token=...
-    mover_access_token_do_hash_para_query()
 
     st.title("Ferramenta Inteligente para Elaboração de ETP")
 
@@ -543,8 +542,7 @@ def main():
 
     st.sidebar.header("Projetos de ETP")
 
-
-    # Seleção / criação de projeto
+    # --- DAQUI PRA BAIXO MANTÉM EXATAMENTE O QUE JÁ TINHA ---
     projetos = listar_projetos()
     options = ["(Novo projeto)"] + [f"{p['id']} - {p['nome']}" for p in projetos]
     escolha = st.sidebar.selectbox("Selecione o projeto", options)
@@ -596,7 +594,7 @@ def main():
 
     col1, col2 = st.columns([1.2, 2.0])
 
-    # COLUNA ESQUERDA: INFOS BÁSICAS + ARQUIVOS
+    # --- COLUNA ESQUERDA: INFOS BÁSICAS + ARQUIVOS ---
     with col1:
         st.subheader("Informações básicas do projeto")
 
@@ -629,7 +627,7 @@ def main():
         else:
             st.caption("Nenhum arquivo cadastrado ainda para esta etapa.")
 
-    # COLUNA DIREITA: IA + TEXTO FINAL DA ETAPA
+    # --- COLUNA DIREITA: IA + TEXTO FINAL ---
     with col2:
         st.subheader(f"Etapa {numero_etapa} de {len(ETAPAS)} – {nome_etapa}")
 
@@ -693,7 +691,7 @@ def main():
             )
             st.success("Etapa salva com sucesso!")
 
-    # EXPORTAÇÃO DOCX + PDF
+    # --- EXPORTAÇÃO DOCX + PDF ---
     st.markdown("---")
     st.subheader("Exportar ETP completo")
 
@@ -730,6 +728,7 @@ def main():
                     file_name=f"etp_projeto_{projeto_id}.pdf",
                     mime="application/pdf",
                 )
+
 
 if __name__ == "__main__":
     main()
