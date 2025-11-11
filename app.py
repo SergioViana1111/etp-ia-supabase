@@ -305,24 +305,34 @@ def tela_login_google():
 
 def mover_access_token_do_hash_para_query():
     """
-    Se o Supabase retornar #access_token=..., esta função (via JS)
-    transforma em ?access_token=... e recarrega a página.
+    Se o Supabase retornar #access_token=..., este JS roda no browser,
+    converte para ?access_token=... e recarrega a página.
     """
-    script = """
-    <script>
-    (function() {
-        if (window.location.hash && window.location.hash.includes("access_token=")) {
-            const params = new URLSearchParams(window.location.hash.substring(1));
-            const access = params.get("access_token");
-            if (access) {
-                const newUrl = window.location.origin + window.location.pathname + "?access_token=" + encodeURIComponent(access);
-                window.location.replace(newUrl);
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                if (window.location.hash && window.location.hash.includes("access_token=")) {
+                    const params = new URLSearchParams(window.location.hash.substring(1));
+                    const access = params.get("access_token");
+                    if (access) {
+                        const url = new URL(window.location.href);
+                        // limpa o hash e adiciona o token como query param
+                        url.hash = "";
+                        url.searchParams.set("access_token", access);
+                        window.location.replace(url.toString());
+                    }
+                }
+            } catch (e) {
+                console.error("Erro ao mover access_token do hash para query:", e);
             }
-        }
-    })();
-    </script>
-    """
-    st.markdown(script, unsafe_allow_html=True)
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
 
 
 # =====================================================
