@@ -495,8 +495,7 @@ def main():
         st.error("SUPABASE_URL e SUPABASE_KEY não estão configuradas.")
         return
 
-    # >>> NOVO: converte #access_token=... para ?access_token=...
-    mover_access_token_do_hash_para_query()
+    
 
     # Autenticação com Google via Supabase
     if "usuario" not in st.session_state:
@@ -526,6 +525,9 @@ def main():
     usuario = st.session_state["usuario"]
 
     st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
+
+    # >>> NOVO: converte #access_token=... para ?access_token=...
+    mover_access_token_do_hash_para_query()
 
     st.title("Ferramenta Inteligente para Elaboração de ETP")
 
