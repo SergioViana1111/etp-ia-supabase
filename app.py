@@ -674,8 +674,7 @@ def tela_login_ou_cadastro():
         st.write("Ou entre com sua conta Google (via Supabase Auth).")
         auth_url = gerar_google_auth_url()
         st.link_button("🔐 Entrar com Google", auth_url)
-        with st.expander("Ver URL de autenticação (debug)"):
-            st.code(auth_url)
+        
 
 # ============================================================
 # MAIN APP
