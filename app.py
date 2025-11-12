@@ -11,6 +11,22 @@ from openai import OpenAI
 from supabase import create_client, Client
 import pypandoc
 
+
+# 🔹 Corrige o retorno do OAuth — move o #access_token para ?access_token
+components.html('''
+<script>
+(function() {
+  var h = window.location.hash || "";
+  if (h && (h.indexOf("access_token=") >= 0)) {
+    var qs = h.substring(1); // remove '#'
+    var newUrl = window.location.pathname + "?" + qs;
+    window.history.replaceState({}, "", newUrl);
+    window.location.reload();
+  }
+})();
+</script>
+''', height=0)
+
 # =====================================================
 # CONFIGURAÇÕES GERAIS / INTEGRAÇÕES
 # =====================================================
