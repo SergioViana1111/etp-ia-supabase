@@ -268,7 +268,7 @@ def main():
             dbg("Logout solicitado. Limpando sessão e parâmetros.")
             st.session_state.clear()
             remover_params_da_url_no_logout()
-            st.experimental_rerun()
+            st.rerun()
 
     dashboard(usuario)
 
