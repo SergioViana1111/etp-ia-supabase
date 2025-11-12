@@ -6,6 +6,16 @@ from urllib.parse import quote
 
 import requests
 import streamlit as st
+\1def clear_query_params():
+    """Clear Streamlit query params safely across versions."""
+    try:
+        st.query_params.clear()
+    except Exception:
+        try:
+            st.query_params = {}
+        except Exception:
+            pass
+
 from docx import Document
 from openai import OpenAI
 from supabase import create_client, Client
@@ -76,8 +86,7 @@ INFOS_BASICAS_CAMPOS = [
 
 def _check_db():
     if supabase is None:
-        st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
-        st.error("Banco (Supabase) não configurado. Defina SUPABASE_URL e SUPABASE_KEY.")
+st.error("Banco (Supabase) não configurado. Defina SUPABASE_URL e SUPABASE_KEY.")
         st.stop()
 
 def listar_projetos():
@@ -203,7 +212,7 @@ def carregar_textos_todas_etapas(projeto_id: int):
     return resp.data or []
 
 # =====================================================
-# USUÁRIOS (LOGIN COM GOOGLE via SUPABASE AUTH)
+# USUÁRIOS (LOGIN REAL COM GOOGLE via SUPABASE AUTH)
 # =====================================================
 
 def obter_usuario_por_email(email: str):
@@ -232,111 +241,59 @@ def criar_usuario(nome: str, sobrenome: str, cpf: str, email: str):
 
 def gerar_google_auth_url():
     """Monta a URL de login do Supabase com Google."""
-    if not SUPABASE_URL or not supabase:
+    if not SUPABASE_URL:
         return "#"
 
-    # Determina a URL de redirecionamento
     if not APP_BASE_URL:
         redirect = "http://localhost:8501"
     else:
         redirect = APP_BASE_URL
 
-    try:
-        # Usa o método correto do Supabase para gerar a URL de auth
-        response = supabase.auth.sign_in_with_oauth({
-            "provider": "google",
-            "options": {
-                "redirect_to": redirect
-            }
-        })
-        return response.url
-    except Exception as e:
-        # Fallback para URL manual se o método acima falhar
-        redirect_enc = quote(redirect, safe="")
-        return f"{SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to={redirect_enc}"
+    redirect_enc = quote(redirect, safe="")
+    return f"{SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to={redirect_enc}&response_type=token"
 
-def processar_callback_auth():
-    """Processa o callback da autenticação OAuth."""
-    if not supabase:
+def obter_user_supabase(access_token: str):
+    """Consulta a API Auth do Supabase para pegar dados do usuário logado."""
+    if not access_token or not SUPABASE_URL:
         return None
-    
+
     try:
-        # Tenta obter a sessão atual
-        session = supabase.auth.get_session()
-        if session and hasattr(session, 'access_token') and session.access_token:
-            return session
-        
-        # Se não há sessão, tenta processar fragmentos da URL
-        params = st.query_params
-        
-        # Verifica se há código de autorização
-        if "code" in params:
-            code = params["code"]
-            # Troca o código por uma sessão
-            session = supabase.auth.exchange_code_for_session(code)
-            if session:
-                return session
-        
-        # Verifica se há access_token direto
-        if "access_token" in params:
-            access_token = params["access_token"]
-            # Obtém o usuário com o token
-            user_response = supabase.auth.get_user(access_token)
-            if user_response:
-                # Cria um objeto session-like
-                class SessionObj:
-                    def __init__(self, token, user):
-                        self.access_token = token
-                        self.user = user
-                
-                user_obj = user_response.user if hasattr(user_response, 'user') else user_response
-                return SessionObj(access_token, user_obj)
-                
-    except Exception as e:
-        st.warning(f"Erro ao processar autenticação: {e}")
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {access_token}",
+        }
+        resp = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
         return None
-    
+
     return None
 
-def obter_dados_usuario_da_sessao(session):
-    """Extrai dados do usuário da sessão."""
-    if not session:
+def sincronizar_usuario(user_json: dict):
+    """
+    Recebe o JSON retornado pelo /auth/v1/user,
+    extrai nome/email e garante um registro em 'usuarios'.
+    """
+    if not user_json:
         return None
-    
-    try:
-        user = session.user if hasattr(session, 'user') else session.get('user') if isinstance(session, dict) else None
-        
-        if not user:
-            # Tenta obter o usuário usando o token
-            access_token = session.access_token if hasattr(session, 'access_token') else session.get('access_token') if isinstance(session, dict) else None
-            if access_token:
-                user_response = supabase.auth.get_user(access_token)
-                user = user_response.user if hasattr(user_response, 'user') else user_response
-        
-        if user:
-            email = user.email if hasattr(user, 'email') else user.get('email') if isinstance(user, dict) else None
-            user_metadata = user.user_metadata if hasattr(user, 'user_metadata') else user.get('user_metadata', {}) if isinstance(user, dict) else {}
-            
-            nome_completo = user_metadata.get('full_name') or user_metadata.get('name') or ''
-            partes = nome_completo.split(' ', 1)
-            nome = partes[0] if partes else ''
-            sobrenome = partes[1] if len(partes) > 1 else ''
-            
-            return {
-                'email': email,
-                'nome': nome,
-                'sobrenome': sobrenome,
-                'cpf': ''  # Será preenchido depois se necessário
-            }
-    except Exception as e:
-        st.warning(f"Erro ao extrair dados do usuário: {e}")
-    
-    return None
+
+    email = user_json.get("email")
+    meta = user_json.get("user_metadata") or {}
+    nome_completo = meta.get("full_name") or meta.get("name") or ""
+    partes = nome_completo.split(" ", 1)
+    nome = partes[0] if partes else ""
+    sobrenome = partes[1] if len(partes) > 1 else ""
+
+    cpf = ""  # pode ser preenchido depois, se quiser
+
+    existente = obter_usuario_por_email(email) if email else None
+    if existente:
+        return existente
+    return criar_usuario(nome, sobrenome, cpf, email)
 
 def tela_login_google():
-    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
-
-    st.title("Ferramenta Inteligente para Elaboração de ETP")
+st.title("Ferramenta Inteligente para Elaboração de ETP")
     st.subheader("Acesse com sua conta Google")
 
     st.write(
@@ -345,26 +302,7 @@ def tela_login_google():
     )
 
     auth_url = gerar_google_auth_url()
-    
-    # Usa HTML para redirecionar diretamente
-    st.markdown(f"""
-        <a href="{auth_url}" target="_self">
-            <button style="
-                background-color: #4285f4;
-                color: white;
-                padding: 12px 24px;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 16px;
-                font-weight: 500;
-                display: inline-block;
-                text-decoration: none;
-            ">
-                🔐 Entrar com Google
-            </button>
-        </a>
-    """, unsafe_allow_html=True)
+    st.link_button("🔐 Entrar com Google", auth_url)
 
     st.caption(
         "Ao clicar em \"Entrar com Google\", você será redirecionado para a página oficial "
@@ -524,51 +462,57 @@ def gerar_pdf_etp(projeto, etapas_rows):
 # =====================================================
 
 def main():
+# --- Handle Supabase implicit grant fragment -> query for Streamlit (Python can't read window.location.hash)
+    try:
+        import streamlit.components.v1 as components
+        components.html('''
+<script>
+(function() {
+  try {
+    var h = window.location.hash || "";
+    if (h && (h.indexOf("access_token=") >= 0 || h.indexOf("refresh_token=") >= 0)) {
+      var qs = h.substring(1); // remove '#'
+      var newUrl = window.location.pathname + "?" + qs;
+      window.history.replaceState({}, "", newUrl);
+      window.location.reload();
+    }
+  } catch(e) { console.warn("hash->query script error", e); }
+})();
+</script>
+        ''', height=0)
+    except Exception as _e:
+        pass
     # Supabase precisa estar configurado
     if supabase is None:
-        st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
-        st.error("SUPABASE_URL e SUPABASE_KEY não estão configuradas.")
+st.error("SUPABASE_URL e SUPABASE_KEY não estão configuradas.")
         return
 
     # Autenticação com Google via Supabase
     if "usuario" not in st.session_state:
-        # Tenta processar callback de autenticação
-        session = processar_callback_auth()
-        
-        if session:
-            dados_usuario = obter_dados_usuario_da_sessao(session)
-            
-            if dados_usuario and dados_usuario.get('email'):
-                # Sincroniza com a tabela de usuários
-                usuario = obter_usuario_por_email(dados_usuario['email'])
-                if not usuario:
-                    usuario = criar_usuario(
-                        dados_usuario['nome'],
-                        dados_usuario['sobrenome'],
-                        dados_usuario['cpf'],
-                        dados_usuario['email']
-                    )
-                
+        params = st.query_params
+        access_tokens = params.get("access_token")
+
+        if access_tokens:
+            access_token = access_tokens[0]
+            user_json = obter_user_supabase(access_token)
+            usuario = sincronizar_usuario(user_json)
+
+            if usuario:
                 st.session_state["usuario"] = usuario
-                st.session_state["session"] = session
-                
-                # Limpa os query params
-                st.query_params.clear()
+                clear_query_params()
                 st.rerun()
+                clear_query_params()
             else:
-                st.warning("Não foi possível obter dados do usuário. Tente novamente.")
+                st.warning("Não foi possível validar o login. Tente novamente.")
+                clear_query_params()
                 tela_login_google()
                 return
         else:
-            # Mostra tela de login
             tela_login_google()
             return
 
     usuario = st.session_state["usuario"]
-
-    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
-
-    st.title("Ferramenta Inteligente para Elaboração de ETP")
+st.title("Ferramenta Inteligente para Elaboração de ETP")
 
     # Info do usuário logado na sidebar
     st.sidebar.markdown(
@@ -576,14 +520,9 @@ def main():
     )
     st.sidebar.markdown(f"*E-mail:* {usuario.get('email','')}")
     if st.sidebar.button("Sair"):
-        # Faz logout no Supabase também
-        try:
-            if supabase:
-                supabase.auth.sign_out()
-        except:
-            pass
         st.session_state.clear()
-        st.query_params.clear()
+        clear_query_params()
+        clear_query_params()
         st.rerun()
 
     st.sidebar.header("Projetos de ETP")
@@ -774,7 +713,6 @@ def main():
                     file_name=f"etp_projeto_{projeto_id}.pdf",
                     mime="application/pdf",
                 )
-
 
 if __name__ == "__main__":
     main()
