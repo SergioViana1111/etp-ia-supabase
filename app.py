@@ -123,6 +123,8 @@ def tela_login_google():
 
 def mover_access_token_do_hash_para_query():
     """Lê o token da hash, salva no localStorage e limpa a URL."""
+    # A remoção do "key" resolve o TypeError no Streamlit 
+    # pois este componente não retorna valor nem é interativo.
     components.html(
         """
         <script>
@@ -132,11 +134,10 @@ def mover_access_token_do_hash_para_query():
                 const access = params.get("access_token");
                 
                 if (access) {
-                    // Salva o token no armazenamento local do navegador
                     localStorage.setItem('supabase_access_token', access);
                     
-                    // Limpa a hash da URL e força o recarregamento (RERUN)
                     const url = new URL(window.location.href.split('#')[0]);
+                    // Substitui a URL para forçar o Streamlit a recarregar no estado limpo
                     window.location.replace(url.toString()); 
                 }
             }
@@ -144,7 +145,7 @@ def mover_access_token_do_hash_para_query():
         </script>
         """,
         height=0, 
-        key="js_mover_token"
+        # REMOVIDO: key="js_mover_token"
     )
 
 def obter_token_do_local_storage():
