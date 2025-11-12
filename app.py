@@ -13,16 +13,22 @@ import pypandoc
 import streamlit.components.v1 as components
 
 
-# 🔹 Corrige o retorno do OAuth — move o #access_token para ?access_token
+# Converte o hash (#access_token=...) da PÁGINA PRINCIPAL para query (?access_token=...)
 components.html('''
 <script>
 (function() {
-  var h = window.location.hash || "";
-  if (h && (h.indexOf("access_token=") >= 0)) {
-    var qs = h.substring(1); // remove '#'
-    var newUrl = window.location.pathname + "?" + qs;
-    window.history.replaceState({}, "", newUrl);
-    window.location.reload();
+  try {
+    var w = window.parent || window.top || window; // <- pega a janela "de fora", não o iframe
+    var h = w.location.hash || "";
+    if (h && h.indexOf("access_token=") >= 0) {
+      var qs = h.substring(1); // remove '#'
+      // Reconstrói usando origin+pathname para não perder o host completo
+      var base = w.location.origin + w.location.pathname;
+      w.history.replaceState({}, "", base + "?" + qs);
+      w.location.reload();
+    }
+  } catch (e) {
+    console.warn("hash->query (parent) error", e);
   }
 })();
 </script>
