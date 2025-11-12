@@ -739,4 +739,42 @@ def main():
 
     # EXPORTAÇÃO DOCX + PDF
     st.markdown("---")
-    st.subheader("Exportar
+    st.subheader("Exportar ETP completo")
+
+    etapas_rows = carregar_textos_todas_etapas(projeto_id)
+    if not etapas_rows:
+        st.info("Preencha e salve pelo menos uma etapa para habilitar a exportação.")
+        return
+
+    col_docx, col_pdf = st.columns(2)
+
+    with col_docx:
+        if st.button("Gerar DOCX do ETP"):
+            docx_buffer = gerar_docx_etp(projeto, etapas_rows)
+            st.download_button(
+                label="Baixar ETP em DOCX",
+                data=docx_buffer,
+                file_name=f"etp_projeto_{projeto_id}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+    with col_pdf:
+        if st.button("Gerar PDF do ETP"):
+            pdf_buffer, erro = gerar_pdf_etp(projeto, etapas_rows)
+            if erro or pdf_buffer is None:
+                st.error(
+                    "Erro ao converter DOCX para PDF no servidor. "
+                    "Baixe o DOCX e converta para PDF localmente no Word/LibreOffice.\n"
+                    f"Detalhes técnicos: {erro}"
+                )
+            else:
+                st.download_button(
+                    label="Baixar ETP em PDF",
+                    data=pdf_buffer,
+                    file_name=f"etp_projeto_{projeto_id}.pdf",
+                    mime="application/pdf",
+                )
+
+
+if __name__ == "__main__":
+    main()
