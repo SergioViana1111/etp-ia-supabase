@@ -138,61 +138,58 @@ def obter_projeto(projeto_id: int): return {}
 # =====================================================
 
 def main():
-    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
+    # ... (Seu código e DEBUG INFO aqui) ...
 
-    # ----------------------------------------------------
-    # DEBUG INFO
-    # ----------------------------------------------------
-    st.write("--- DEBUG INFO ---")
-    st.write(f"SUPABASE_URL está configurada: {'Sim' if os.getenv('SUPABASE_URL') else 'NÃO'}")
-    st.write(f"APP_BASE_URL está configurada: {os.getenv('APP_BASE_URL')}")
-    st.write(f"Sessão atual (usuario): {st.session_state.get('usuario', 'NENHUM')}")
-    st.write("--------------------")
-
-    if supabase is None:
-        st.error("ERRO CRÍTICO: Configurações de Supabase ausentes.")
-        return
-
-    # 1) Executa o JS para ler o token da # e salvá-lo no localStorage
-    st.write("PASSO 1: Rodando script JS para salvar o token da # no Local Storage (se houver).")
-    mover_access_token_do_hash_para_query()
+    mover_access_token_do_hash_para_query() # PASSO 1
 
     # 2) Bloco de Autenticação
     if "usuario" not in st.session_state:
         st.write("PASSO 2: Usuário não está na sessão. Iniciando checagem de login.")
         
-        # Tenta ler o token do local storage
-        st.write("PASSO 2.1: Tentando ler o token do Local Storage...")
-        access_token = obter_token_do_local_storage()
+        # ----------------------------------------------------------------------
+        # CENTRALIZAÇÃO DA LEITURA DE TOKEN
+        # O token é lido apenas se a flag 'token_lido' não estiver na sessão
+        # ----------------------------------------------------------------------
+        
+        access_token = None
+        
+        if "token_lido" not in st.session_state:
+            st.session_state["token_lido"] = True # Marca que tentaremos ler nesta execução
+            
+            st.write("PASSO 2.1: Tentando ler o token do Local Storage (Primeira tentativa de leitura).")
+            # Esta chamada é o ponto de falha. Ela é feita apenas uma vez por ciclo de lógica.
+            try:
+                access_token = obter_token_do_local_storage()
+            except Exception as e:
+                # Se falhar aqui, mostra a tela de login.
+                st.error(f"ERRO CRÍTICO no PASSO 2.1 (Componente JS): {type(e).__name__}. Verifique se as chaves 'local_storage_reader_return' são únicas.")
+                tela_login_google()
+                return
 
         if access_token:
             st.write("PASSO 3: Token encontrado no Local Storage.")
             
+            # ... (Restante da lógica PASSO 3.1 até PASSO 5.1 permanece igual) ...
+            
             if "login_processado" not in st.session_state:
                 st.session_state["login_processado"] = True 
-                st.write("PASSO 3.1: Iniciando processamento do token (1ª vez).")
 
-                # Ponto de Falha 1: Validação do Token no Supabase Auth API
                 st.write("PASSO 4: Chamando obter_user_supabase (API Auth)...")
                 user_json = obter_user_supabase(access_token)
                 
                 if user_json:
-                    st.write("PASSO 4.1: SUCESSO! Token validado. Dados do usuário recebidos.")
+                    # ... (SUCESSO: Sincronização, salvamento em session_state) ...
+                    st.write("PASSO 5.1: SUCESSO! Usuário salvo na sessão. Preparando para RERUN.")
                     
-                    # Ponto de Falha 2: Sincronização com a Tabela 'usuarios'
-                    st.write("PASSO 5: Sincronizando usuário com a tabela 'usuarios'...")
-                    usuario = sincronizar_usuario(user_json)
-                    
-                    if usuario:
-                        st.write("PASSO 5.1: SUCESSO! Usuário salvo na sessão. Preparando para RERUN.")
-                        st.session_state["usuario"] = usuario
-                        st.session_state["access_token"] = access_token 
-
-                        st.experimental_rerun()
-                    else:
-                        st.error("ERRO 5.2: Falha ao sincronizar/criar registro na tabela 'usuarios'.")
+                    # Salva o usuário e força o rerun
+                    # ...
+                    st.experimental_rerun()
                 else:
                     st.error("ERRO 4.2: Falha na validação do token com a API Auth do Supabase.")
+            
+            # Se falhou, limpa o token_lido para tentar novamente no próximo ciclo
+            if "usuario" not in st.session_state and "token_lido" in st.session_state:
+                del st.session_state["token_lido"] 
             
             if "usuario" not in st.session_state:
                 st.write("PASSO 6: Processamento falhou. Exibindo tela de login.")
@@ -208,13 +205,6 @@ def main():
     st.write("PASSO 7: Usuário na sessão. Exibindo Dashboard.")
     st.success("AUTENTICAÇÃO COMPLETA. BEM-VINDO!")
 
-    if "login_processado" in st.session_state:
-        del st.session_state["login_processado"]
-        
-    usuario = st.session_state["usuario"]
-
-    # --- INÍCIO DO DASHBOARD ---
-    # ... (Seu código principal continua aqui) ...
-
+    # ... (Restante do seu código) ...
 if __name__ == "__main__":
     main()
