@@ -1,13 +1,12 @@
+# streamlit_app.py
 import os
-import io
-# Importações omitidas...
+from datetime import datetime
 from urllib.parse import quote
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from supabase import create_client, Client
-# from openai import OpenAI # Importe suas bibliotecas necessárias
+import streamlit.components.v1 as components
 
 # =====================================================
 # CONFIGURAÇÕES GERAIS / INTEGRAÇÕES
@@ -15,95 +14,211 @@ from supabase import create_client, Client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-APP_BASE_URL = os.getenv("APP_BASE_URL") 
+APP_BASE_URL = os.getenv("APP_BASE_URL")  # ex: https://etp-com-ia.streamlit.app/
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    supabase: Client | None = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase: Client | None = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
-    # A variável 'supabase' deve estar configurada para uso nas funções auxiliares
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) 
+    supabase: Client | None = None
 
 # =====================================================
-# FUNÇÕES AUXILIARES DE AUTENTICAÇÃO (Mantenha as suas)
+# UTIL / DEBUG
 # =====================================================
+def dbg(msg: str):
+    """Pequeno helper de debug com timestamp."""
+    st.write(f"[{datetime.utcnow().isoformat()}Z] {msg}")
+
+# =====================================================
+# FUNÇÕES AUXILIARES DE AUTENTICAÇÃO E USUÁRIOS
+# =====================================================
+
+def gerar_google_auth_url():
+    """Gera URL do OAuth do Supabase apontando de volta para o APP_BASE_URL."""
+    if not SUPABASE_URL:
+        return "#"
+    redirect = APP_BASE_URL or "http://localhost:8501"
+    redirect_enc = quote(redirect, safe="")
+    return f"{SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to={redirect_enc}"
 
 def obter_user_supabase(access_token: str):
-    """Consulta a API Auth do Supabase."""
-    if not access_token or not SUPABASE_URL or not SUPABASE_KEY: return None
+    """Consulta o Supabase Auth para obter o usuário a partir do access_token."""
+    if not access_token or not SUPABASE_URL or not SUPABASE_KEY:
+        st.error("Erro: Parâmetros de Supabase ou token ausentes.")
+        return None
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {access_token}"}
         resp = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers=headers, timeout=15)
         if resp.status_code == 200:
             return resp.json()
-        st.error(f"Falha na validação do token (Status: {resp.status_code}). Resposta: {resp.text[:50]}...") 
+        st.error(f"Falha na validação do token (Status: {resp.status_code}).")
+        try:
+            st.code(resp.text[:500], language="json")
+        except Exception:
+            pass
+        return None
     except Exception as e:
-        st.error(f"Erro ao consultar Supabase Auth: {e}")
-    return None
+        st.error(f"Erro inesperado ao consultar o Supabase Auth API: {e}")
+        return None
 
 def sincronizar_usuario(user_json: dict):
-    # CRÍTICO: Sua lógica de SELECT/INSERT na tabela 'usuarios'
-    # Esta função deve retornar o objeto do usuário do seu BD
-    if user_json:
-        # st.write(f"Sincronizando: {user_json.get('email')}")
-        return {"nome": user_json.get("user_metadata", {}).get("full_name"), "email": user_json.get("email")}
-    return None
+    """
+    Exemplo simples: espelha o usuário do Auth em uma tabela 'usuarios'.
+    Adapte campos conforme seu schema.
+    """
+    if not supabase:
+        return None
 
-def gerar_google_auth_url():
-    if not SUPABASE_URL: return "#"
-    redirect = APP_BASE_URL if APP_BASE_URL else "http://localhost:8501" 
-    redirect_enc = quote(redirect, safe="")
-    return f"{SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to={redirect_enc}"
+    email = (
+        user_json.get("email")
+        or user_json.get("user_metadata", {}).get("email")
+        or user_json.get("identities", [{}])[0].get("identity_data", {}).get("email")
+    )
+    nome = (
+        user_json.get("user_metadata", {}).get("name")
+        or user_json.get("user_metadata", {}).get("full_name")
+        or (email.split("@")[0] if email else "Usuário")
+    )
+
+    payload = {
+        "email": email,
+        "nome": nome,
+        "ultimo_login_utc": datetime.utcnow().isoformat() + "Z",
+    }
+
+    try:
+        # upsert por email (ajuste 'on_conflict' ao seu schema)
+        res = supabase.table("usuarios").upsert(payload, on_conflict="email").execute()
+        # Retorna o registro salvo/atualizado
+        if res.data and len(res.data) > 0:
+            return res.data[0]
+        # fallback: retorna payload mínimo
+        return payload
+    except Exception as e:
+        st.error(f"Erro ao sincronizar usuário na tabela 'usuarios': {e}")
+        return None
+
+# =====================================================
+# INJEÇÕES JS: mover token e limpar URL
+# =====================================================
+
+def mover_access_token_do_hash_para_query():
+    """
+    Se a URL tiver #access_token=..., move para ?access_token=... e recarrega SEM o hash.
+    Evita usar localStorage (que causava colisão de keys nos components).
+    """
+    components.html(
+        """
+        <script>
+        (function () {
+          try {
+            if (window.location.hash && window.location.hash.includes("access_token=")) {
+              const params = new URLSearchParams(window.location.hash.substring(1));
+              const access = params.get("access_token");
+              if (access) {
+                const url = new URL(window.location.href.split("#")[0]);
+                if (!url.searchParams.get("access_token")) {
+                  url.searchParams.set("access_token", access);
+                }
+                // opcional: marca dashboard=1 para rota "logada"
+                if (!url.searchParams.get("dashboard")) {
+                  url.searchParams.set("dashboard", "1");
+                }
+                window.location.replace(url.toString());
+              }
+            }
+          } catch (e) {
+            console.error("Erro ao mover token da hash para query:", e);
+          }
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+def limpar_access_token_da_url():
+    """
+    Remove ?access_token=... da URL após a sessão estar estabelecida, mantendo ?dashboard=1.
+    """
+    components.html(
+        """
+        <script>
+        (function () {
+          try {
+            const url = new URL(window.location.href);
+            if (url.searchParams.has("access_token")) {
+              url.searchParams.delete("access_token");
+              window.history.replaceState({}, "", url.toString());
+            }
+          } catch (e) {
+            console.error("Erro ao limpar access_token da URL:", e);
+          }
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+def remover_dashboard_da_url():
+    """
+    Usado no logout: remove ?dashboard=1 (e também access_token se sobrou).
+    """
+    components.html(
+        """
+        <script>
+        (function () {
+          try {
+            const url = new URL(window.location.href);
+            if (url.searchParams.has("dashboard")) {
+              url.searchParams.delete("dashboard");
+            }
+            if (url.searchParams.has("access_token")) {
+              url.searchParams.delete("access_token");
+            }
+            window.history.replaceState({}, "", url.toString());
+          } catch (e) {
+            console.error("Erro ao limpar params da URL:", e);
+          }
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+# =====================================================
+# UI BÁSICA
+# =====================================================
 
 def tela_login_google():
-    st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
     st.title("Ferramenta Inteligente para Elaboração de ETP")
     st.subheader("Acesse com sua conta Google")
     auth_url = gerar_google_auth_url()
     st.markdown(
-        f'<a href="{auth_url}" target="_self"><button style="background-color:#4285F4; color:white; border:none; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 4px;">🔐 Entrar com Google</button></a>', 
+        f'<a href="{auth_url}" target="_self"><button style="background-color:#4285F4; color:white; border:none; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 4px;">🔐 Entrar com Google</button></a>',
         unsafe_allow_html=True
     )
 
-# =====================================================
-# FUNÇÕES DE FLUXO JS (Simplificada)
-# =====================================================
-
-def mover_access_token_do_hash_para_query():
-    """Lê o token da hash e o move para a query string, forçando o Streamlit a ler."""
-    # Removemos o 'key' e qualquer complexidade para evitar o TypeError/Tela Branca.
-    components.html(
-        """
-        <script>
-        (function() {
-            if (window.location.hash && window.location.hash.includes("access_token=")) {
-                const params = new URLSearchParams(window.location.hash.substring(1));
-                const access = params.get("access_token");
-                const url = new URL(window.location.href.split('#')[0]);
-                
-                if (access) {
-                    url.searchParams.set("access_token", access);
-                    // CRÍTICO: replace() força o Streamlit a iniciar um ciclo limpo
-                    window.location.replace(url.toString()); 
-                }
-            }
-        })();
-        </script>
-        """,
-        height=0, 
-    )
+def dashboard(usuario: dict):
+    st.header("Dashboard de Elaboração de ETP")
+    st.success("AUTENTICAÇÃO COMPLETA. BEM-VINDO!")
+    st.write("Dados do usuário (resumo):")
+    st.json({
+        "nome": usuario.get("nome"),
+        "email": usuario.get("email"),
+        "ultimo_login_utc": usuario.get("ultimo_login_utc"),
+    })
 
 # =====================================================
-# FUNÇÃO PRINCIPAL (MAIN)
+# APP
 # =====================================================
 
 def main():
+    # Configuração da página (chamar apenas uma vez)
     st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
 
-    # ----------------------------------------------------
-    # DEBUG INFO
-    # ----------------------------------------------------
+    # DEBUG HEADER
     st.write("--- DEBUG INFO ---")
     st.write(f"SUPABASE_URL está configurada: {'Sim' if os.getenv('SUPABASE_URL') else 'NÃO'}")
+    st.write(f"APP_BASE_URL está configurada: {os.getenv('APP_BASE_URL')}")
     st.write(f"Sessão atual (usuario): {st.session_state.get('usuario', 'NENHUM')}")
     st.write("--------------------")
 
@@ -111,82 +226,68 @@ def main():
         st.error("ERRO CRÍTICO: Configurações de Supabase ausentes.")
         return
 
-    # 1) Executa o JS para ler o token da # e movê-lo para a ?
-    st.write("PASSO 1: Rodando script JS para mover o token da # para a ? (Rerun será forçado).")
+    # 1) Converter #access_token=... -> ?access_token=...
+    dbg("PASSO 1: Movendo token da hash (#) para a query (se houver).")
     mover_access_token_do_hash_para_query()
 
-    # 2) Bloco de Autenticação
+    # 2) Leitura dos parâmetros da query
+    dbg("PASSO 2: Lendo parâmetros de query.")
+    params = st.experimental_get_query_params()
+    access_token = None
+    if "access_token" in params and len(params["access_token"]) > 0:
+        access_token = params["access_token"][0]
+        dbg("PASSO 2.1: access_token presente na query.")
+    else:
+        dbg("PASSO 2.1: nenhum access_token na query.")
+
+    # 3) Autenticação / Sessão
     if "usuario" not in st.session_state:
-        st.write("PASSO 2: Usuário não está na sessão. Iniciando checagem de login.")
-        
-        # Leitura da QUERY STRING, que deve ter o token após o PASSO 1
-        params = st.experimental_get_query_params()
-        access_tokens = params.get("access_token")
-
-        if access_tokens:
-            st.write("PASSO 3: Token encontrado na URL query string (?access_token=...).")
-            access_token = access_tokens[0]
-            
-            # Garante que o processamento do token ocorra apenas uma vez
-            if "login_processado" not in st.session_state:
-                st.session_state["login_processado"] = True 
-                st.write("PASSO 3.1: Iniciando processamento do token (1ª vez).")
-
-                # Ponto de Falha 1: Validação do Token
-                st.write("PASSO 4: Chamando obter_user_supabase (API Auth)...")
-                user_json = obter_user_supabase(access_token)
-                
-                if user_json:
-                    st.write("PASSO 4.1: SUCESSO! Token validado.")
-                    
-                    # Ponto de Falha 2: Sincronização
-                    st.write("PASSO 5: Sincronizando usuário com a tabela 'usuarios'...")
-                    usuario = sincronizar_usuario(user_json)
-                    
-                    if usuario:
-                        st.write("PASSO 5.1: SUCESSO! Usuário salvo na sessão. Preparando para RERUN.")
-                        st.session_state["usuario"] = usuario
-                        st.session_state["access_token"] = access_token 
-
-                        # CRÍTICO: Limpa a URL e força o Streamlit a recarregar no dashboard limpo
-                        st.experimental_set_query_params() 
-                        st.experimental_rerun()
-                    else:
-                        st.error("ERRO 5.2: Falha ao sincronizar/criar registro na tabela 'usuarios'.")
+        dbg("PASSO 3: Usuário não está na sessão. Iniciando checagem de login.")
+        if access_token:
+            dbg("PASSO 3.1: Validando token no Supabase Auth API...")
+            user_json = obter_user_supabase(access_token)
+            if user_json:
+                dbg("PASSO 3.2: Token válido. Sincronizando usuário na tabela 'usuarios'...")
+                usuario = sincronizar_usuario(user_json)
+                if usuario:
+                    st.session_state["usuario"] = usuario
+                    st.session_state["autenticado_em"] = datetime.utcnow().isoformat() + "Z"
+                    dbg("PASSO 3.3: Sessão criada. Limpando access_token da URL e marcando dashboard=1.")
+                    # marca dashboard=1 caso ainda não esteja
+                    if params.get("dashboard", ["0"])[0] != "1":
+                        st.experimental_set_query_params(dashboard="1")
+                    # remove access_token da URL
+                    limpar_access_token_da_url()
                 else:
-                    st.error("ERRO 4.2: Falha na validação do token com a API Auth do Supabase.")
-            
-            # Se o processo falhou (chegou aqui sem rerun), exibe a tela de login
-            if "usuario" not in st.session_state:
-                st.write("PASSO 6: Processamento falhou. Exibindo tela de login.")
-                # Limpa a query param se falhou, para evitar que o loop continue
-                st.experimental_set_query_params() 
+                    st.error("ERRO: Falha ao sincronizar/criar registro na tabela 'usuarios'.")
+                    tela_login_google()
+                    return
+            else:
+                st.error("ERRO: Falha na validação do token com a API Auth do Supabase.")
                 tela_login_google()
                 return
-        
         else:
-            st.write("PASSO 3: Nenhum token encontrado na URL. Exibindo tela de login.")
+            dbg("PASSO 3.1: Sem token. Exibindo tela de login.")
             tela_login_google()
             return
-    
-    # 3) Daqui pra baixo SÓ RODA SE O USUÁRIO ESTIVER LOGADO
-    st.write("PASSO 7: Usuário na sessão. Exibindo Dashboard.")
-    st.success("AUTENTICAÇÃO COMPLETA. BEM-VINDO!")
 
-    # Limpa a flag de processamento, pois o login foi bem-sucedido
-    if "login_processado" in st.session_state:
-        del st.session_state["login_processado"]
-        
+    # 4) Usuário em sessão -> Dashboard
+    dbg("PASSO 4: Usuário está na sessão. Exibindo Dashboard.")
     usuario = st.session_state["usuario"]
-    
-    # --- INÍCIO DO DASHBOARD ---
-    st.sidebar.header(f"Olá, {usuario.get('nome', 'Usuário')}")
-    st.header("Dashboard de Elaboração de ETP")
-    
-    if st.sidebar.button("Sair", help="Encerrar sessão"):
-        st.session_state.clear()
-        st.experimental_rerun()
 
+    # Sidebar com info e logout
+    with st.sidebar:
+        st.header(f"Olá, {usuario.get('nome','Usuário')}")
+        st.caption(usuario.get("email", ""))
+        st.divider()
+        if st.button("Sair", help="Encerrar sessão"):
+            dbg("Logout solicitado. Limpando sessão e parâmetros.")
+            st.session_state.clear()
+            remover_dashboard_da_url()
+            st.experimental_rerun()
+
+    # Conteúdo principal
+    dashboard(usuario)
 
 if __name__ == "__main__":
     main()
