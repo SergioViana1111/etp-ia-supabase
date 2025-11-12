@@ -509,95 +509,86 @@ def gerar_pdf_etp(projeto, etapas_rows):
 def main():
     st.set_page_config(page_title="🛠️ Debug Mode — Ferramenta IA para ETP", layout="wide")
     
+    # 🔍 Mostra estado da sessão no topo (útil para debug)
     with st.expander("🔍 Estado da Sessão (st.session_state)", expanded=False):
         st.write(st.session_state)
 
+    # Supabase precisa estar configurado
     if supabase is None:
         st.error("SUPABASE_URL e SUPABASE_KEY não estão configuradas.")
         return
 
     st.title("🛠️ Modo Depuração: Login com Google")
 
-    # 🔎 ETAPA 1: Verificar query params — agora procuramos por `code` OU `access_token`
-    code = st.query_params.get("code")
-    access_token = st.session_state.get("access_token")  # Podemos guardar na sessão
+    # 🔎 ETAPA 1: Verificar query params
+    st.write("### 🔎 ETAPA 1: Verificando query params")
+    access_token = st.query_params.get("access_token")
+    
+    # Normaliza: pode ser str ou list
+    if isinstance(access_token, list) and access_token:
+        access_token = access_token[0]
+    elif not isinstance(access_token, str):
+        access_token = None
 
-    # Normaliza
-    if isinstance(code, list) and code:
-        code = code[0]
-    elif not isinstance(code, str):
-        code = None
+    st.write(f"`access_token` recebido: `{access_token[:20]}...`" if access_token else "❌ `access_token` não encontrado")
 
-    st.write("### 🔎 ETAPA 1: Verificando parâmetros")
-    st.write(f"`code` recebido: `{code[:20]}...`" if code else "❌ `code` não encontrado")
-    st.write(f"`access_token` em sessão: `{'✅ Sim' if access_token else '❌ Não'}`")
-
-    # 🔁 Se temos `code`, trocamos por `access_token`
-    if code and not access_token:
-        st.write("### 🔄 ETAPA 2: Trocando `code` por `access_token` via `/token`")
+    # 🔎 ETAPA 2: Processar token, se existir
+    if access_token:
+        st.write("### ✅ ETAPA 2: Token encontrado — validando usuário...")
         
-        redirect_uri = APP_BASE_URL or "http://localhost:8501"
-        token_url = f"{SUPABASE_URL}/auth/v1/token?grant_type=authorization_code"
-
-        payload = {
-            "code": code,
-            "redirect_uri": redirect_uri,
-        }
-        headers = {
-            "apikey": SUPABASE_KEY,
-            "Content-Type": "application/json",
-        }
-
-        try:
-            st.write(f"📡 POST para: `{token_url}`")
-            st.write(f"📦 Payload: `{{'code': '{code[:10]}...', 'redirect_uri': '{redirect_uri}'}}`")
-
-            resp = requests.post(token_url, json=payload, headers=headers, timeout=10)
-            st.write(f"➡️ Status: `{resp.status_code}`")
-            if resp.status_code == 200:
-                tokens = resp.json()
-                new_access_token = tokens.get("access_token")
-                st.write(f"✅ `access_token` obtido (primeiros 10 chars): `{new_access_token[:10]}...`")
-                st.session_state["access_token"] = new_access_token
-                st.session_state["refresh_token"] = tokens.get("refresh_token")
-                st.toast("🔑 Token obtido com sucesso!", icon="✅")
+        user_json = obter_user_supabase(access_token)
+        
+        if user_json:
+            st.write("### ✅ ETAPA 3: Usuário obtido — sincronizando com banco...")
+            usuario = sincronizar_usuario(user_json)
+            
+            if usuario:
+                st.session_state["usuario"] = usuario
+                st.write("### ✅ ETAPA 4: Usuário salvo na sessão!")
+                st.toast("✅ Login bem-sucedido! Redirecionando...", icon="🎉")
                 
-                # Limpa o `code` da URL
+                # Limpa os parâmetros e recarrega
                 st.query_params.clear()
                 st.rerun()
             else:
-                st.error(f"❌ Erro ao trocar code por token: `{resp.status_code}`")
-                st.code(resp.text)
-                st.query_params.clear()  # evita loop
-                return
-        except Exception as e:
-            st.exception("💥 Erro na chamada para `/token`")
-
-    # ✅ Agora, com `access_token` na sessão, validamos o usuário
-    access_token = st.session_state.get("access_token")
-    if access_token:
-        st.write("### ✅ ETAPA 3: Validando usuário com `access_token`")
-        user_json = obter_user_supabase(access_token)
-        if user_json:
-            st.write("### ✅ ETAPA 4: Sincronizando usuário com banco")
-            usuario = sincronizar_usuario(user_json)
-            if usuario:
-                st.session_state["usuario"] = usuario
-                # Remove token da sessão (opcional, por segurança)
-                # del st.session_state["access_token"]
-                st.toast("🎉 Login bem-sucedido!", icon="✅")
-                st.rerun()
-            else:
-                st.error("❌ Falha ao sincronizar usuário")
+                st.error("❌ Falha ao sincronizar usuário com o banco")
+                st.query_params.clear()
         else:
-            st.error("❌ Falha ao obter usuário — token pode estar inválido")
-            if "access_token" in st.session_state:
-                del st.session_state["access_token"]
-            st.rerun()
+            st.error("❌ Falha ao obter dados do usuário via Supabase Auth")
+            st.query_params.clear()
+    else:
+        # Nenhum token → mostra tela de login
+        st.write("### ❌ Nenhum token encontrado → exibindo tela de login")
+        tela_login_google()
+        return
 
-    # ❌ Nenhum token → exibe login
-    st.write("### ❌ Nenhum token ativo → exibindo tela de login")
-    tela_login_google()
+    # Se chegou até aqui, usuário está autenticado
+    usuario = st.session_state.get("usuario")
+    if not usuario:
+        st.error("⚠️ Usuário não encontrado na sessão — algo falhou.")
+        st.button("🔄 Recarregar")
+        return
+
+    # ✅ Login bem-sucedido: interface principal
+    st.success(f"✅ Logado como: **{usuario.get('nome')} {usuario.get('sobrenome')}** ({usuario.get('email')})")
+
+    # Sidebar com info do usuário
+    st.sidebar.markdown(f"**Usuário:** {usuario.get('nome','')} {usuario.get('sobrenome','')}")
+    st.sidebar.markdown(f"*E-mail:* {usuario.get('email','')}")
+    if st.sidebar.button("Sair"):
+        st.session_state.clear()
+        st.query_params.clear()
+        st.rerun()
+
+    st.sidebar.header("Projetos de ETP")
+    projetos = listar_projetos()
+    options = ["(Novo projeto)"] + [f"{p['id']} - {p['nome']}" for p in projetos]
+    escolha = st.sidebar.selectbox("Selecione o projeto", options)
+
+    # Resto da interface (pode ser minimamente debugado se necessário)
+    st.info("✅ Login funcionando! A interface principal está pronta para uso.")
+    st.write("➡️ Selecione um projeto na barra lateral para continuar.")
+
 
 if __name__ == "__main__":
     main()
