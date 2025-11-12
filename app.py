@@ -154,66 +154,97 @@ def mover_access_token_do_hash_para_query():
 # =====================================================
 # INTERFACE STREAMLIT (Lógica de autenticação FINAL)
 # =====================================================
+# Mantenha todas as suas funções auxiliares (obter_user_supabase, sincronizar_usuario, etc.) 
+# inalteradas, utilizando as versões mais recentes que enviei.
 
 def main():
     st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
 
+    # Apenas para fins de debug, garanta que essas variáveis estão sendo lidas
+    st.write("--- DEBUG INFO ---")
+    st.write(f"SUPABASE_URL está configurada: {'Sim' if os.getenv('SUPABASE_URL') else 'NÃO'}")
+    st.write(f"APP_BASE_URL está configurada: {os.getenv('APP_BASE_URL')}")
+    st.write(f"Sessão atual (usuario): {st.session_state.get('usuario', 'NENHUM')}")
+    st.write("--------------------")
+
     if supabase is None:
-        st.error("SUPABASE_URL e SUPABASE_KEY não estão configuradas.")
+        st.error("ERRO CRÍTICO: Configurações de Supabase ausentes.")
         return
 
     # 1) Tenta converter #access_token em ?access_token
+    st.write("PASSO 1: Rodando script JS para mover o token de # para ?")
     mover_access_token_do_hash_para_query()
 
     # 2) Bloco de Autenticação
     if "usuario" not in st.session_state:
+        st.write("PASSO 2: Usuário não está na sessão. Iniciando checagem de login.")
+        
         params = st.experimental_get_query_params()
         access_tokens = params.get("access_token")
 
         if access_tokens:
+            st.write("PASSO 3: Token encontrado na URL query string (?access_token=...)")
             access_token = access_tokens[0]
             
-            # Garante que o processo de login só ocorra uma vez por token
             if "login_processado" not in st.session_state:
-                st.session_state["login_processado"] = True # Marca o início do processo
+                st.session_state["login_processado"] = True 
+                st.write("PASSO 3.1: Iniciando processamento do token (1ª vez neste ciclo de execução).")
 
+                # ----------------------------------------------------
+                # Ponto de Falha 1: Validação do Token no Supabase Auth API
+                # ----------------------------------------------------
+                st.write("PASSO 4: Chamando obter_user_supabase (API Auth)...")
                 user_json = obter_user_supabase(access_token)
                 
                 if user_json:
+                    st.write("PASSO 4.1: SUCESSO! Token validado. Dados do usuário recebidos.")
+                    
+                    # ----------------------------------------------------
+                    # Ponto de Falha 2: Sincronização com a Tabela 'usuarios'
+                    # ----------------------------------------------------
+                    st.write("PASSO 5: Sincronizando usuário com a tabela 'usuarios'...")
                     usuario = sincronizar_usuario(user_json)
                     
                     if usuario:
+                        st.write("PASSO 5.1: SUCESSO! Usuário salvo na sessão. Preparando para RERUN.")
                         st.session_state["usuario"] = usuario
                         st.session_state["access_token"] = access_token 
 
                         # CRÍTICO: Limpa a query string e força o rerun
                         st.experimental_set_query_params() 
                         st.experimental_rerun()
-                        # O Streamlit irá recarregar no topo do script com o usuário em sessão.
+                        # Se chegar aqui, o código é interrompido para recarregar.
+
                     else:
-                        st.error("Falha ao criar o registro do usuário no BD (tabela 'usuarios').")
+                        st.error("ERRO 5.2: Falha ao sincronizar/criar registro na tabela 'usuarios'.")
                         st.experimental_set_query_params() 
                 else:
-                    st.warning("Falha na validação do token (veja os logs de erro acima).")
+                    st.error("ERRO 4.2: Falha na validação do token com a API Auth do Supabase. (Verifique erros acima).")
                     st.experimental_set_query_params() 
             
-            # Se o processo falhou e o usuário não foi logado, exibe a tela de login
+            # Se o processo falhou (chegou aqui sem rerun) ou já foi processado
             if "usuario" not in st.session_state:
+                st.write("PASSO 6: Processamento falhou ou token já foi processado. Exibindo tela de login.")
                 tela_login_google()
                 return
         
         else:
-            # Não tem token na URL e não tem usuário em sessão → tela de login
+            st.write("PASSO 3: Nenhum token na URL. Exibindo tela de login.")
             tela_login_google()
             return
     
-    # --- 3) DAQUI PRA BAIXO SÓ RODA SE O USUÁRIO ESTIVER LOGADO ---
-    # Limpa a flag de processamento para futuros logouts/re-logins
+    # 3) Daqui pra baixo SÓ RODA SE O USUÁRIO ESTIVER LOGADO
+    st.write("PASSO 7: Usuário na sessão. Exibindo Dashboard.")
+
     if "login_processado" in st.session_state:
         del st.session_state["login_processado"]
         
     usuario = st.session_state["usuario"]
-    # ... (Resto da aplicação) ...
+    # ... (O resto da sua aplicação/dashboard começa aqui) ...
+
+    st.success("AUTENTICAÇÃO COMPLETA. BEM-VINDO AO DASHBOARD!")
+    # ... (Restante do seu código principal) ...
+    # ... (ex: st.sidebar.header("Projetos de ETP"), etc.)
 
 
 if __name__ == "__main__":
