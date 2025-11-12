@@ -13,7 +13,7 @@ import pypandoc
 
 
 # 🔹 Corrige o retorno do OAuth — move o #access_token para ?access_token
-components.html(''
+components.html('''
 <script>
 (function() {
   var h = window.location.hash || "";
@@ -25,7 +25,7 @@ components.html(''
   }
 })();
 </script>
-'', height=0)
+''', height=0)
 
 # =====================================================
 # CONFIGURAÇÕES GERAIS / INTEGRAÇÕES
