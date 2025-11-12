@@ -32,23 +32,26 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ==========================
 # FIX: converter #access_token -> ?access_token (quando vem do Google Auth)
 # ==========================
-components.html(\"\"\"
+# Converte o hash (#access_token=...) da PÁGINA PRINCIPAL para query (?access_token=...)
+components.html('''
 <script>
-(function(){
-  try{
-    var w = window.parent || window.top || window;
+(function() {
+  try {
+    var w = window.parent || window.top || window; // <- pega a janela "de fora", não o iframe
     var h = w.location.hash || "";
-    if(h && h.indexOf("access_token=")>=0){
-      var qs = h.substring(1);
+    if (h && h.indexOf("access_token=") >= 0) {
+      var qs = h.substring(1); // remove '#'
+      // Reconstrói usando origin+pathname para não perder o host completo
       var base = w.location.origin + w.location.pathname;
       w.history.replaceState({}, "", base + "?" + qs);
       w.location.reload();
     }
-  }catch(e){ console.warn("hash->query (parent) error", e); }
+  } catch (e) {
+    console.warn("hash->query (parent) error", e);
+  }
 })();
 </script>
-\"\"\", height=0)
-
+''', height=0)
 # ==========================
 # ETAPAS
 # ==========================
