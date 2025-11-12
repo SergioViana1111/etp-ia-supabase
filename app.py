@@ -99,7 +99,7 @@ def tela_login_google():
             height=0
         )
         # O rerun é acionado pelo clique, mas o navegador já estará redirecionando
-        st.experimental_rerun() 
+        st.rerun() 
     # ----------------------------------------------------------------------
     
     st.caption("Ao clicar em 'Entrar com Google', você será redirecionado para a página oficial do Google para login/autorização e, em seguida, voltará para esta aplicação.")
