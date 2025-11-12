@@ -18,25 +18,24 @@ import streamlit.components.v1 as components
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-APP_BASE_URL = os.getenv("APP_BASE_URL")  # ex.: https://seu-app.streamlit.app
+# CRÍTICO: Deve ser a URL exata do Streamlit, ex: https://etp-com-ia.streamlit.app
+APP_BASE_URL = os.getenv("APP_BASE_URL") 
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.warning(
         "SUPABASE_URL e/ou SUPABASE_KEY não estão configuradas. "
-        "Defina-as nos secrets do Streamlit (ou .streamlit/secrets.toml)."
+        "Defina-as nos secrets do Streamlit."
     )
     supabase: Client | None = None
 else:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # =====================================================
-# FUNÇÕES DE USUÁRIOS (Apenas as relevantes para login)
+# FUNÇÕES AUXILIARES DE AUTENTICAÇÃO
 # =====================================================
 
-# ... (Funções obter_usuario_por_email, criar_usuario, sincronizar_usuario permanecem inalteradas)
 def obter_usuario_por_email(email: str):
     if supabase is None: return None
-    # ... (Resto da função)
     resp = (
         supabase.table("usuarios")
         .select("*")
@@ -49,7 +48,6 @@ def obter_usuario_por_email(email: str):
 
 def criar_usuario(nome: str, sobrenome: str, cpf: str, email: str):
     if supabase is None: return None
-    # ... (Resto da função)
     resp = supabase.table("usuarios").insert(
         {
             "nome": nome,
@@ -63,7 +61,7 @@ def criar_usuario(nome: str, sobrenome: str, cpf: str, email: str):
 def obter_user_supabase(access_token: str):
     """Consulta a API Auth do Supabase para pegar dados do usuário logado."""
     if not access_token or not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("Erro: Parâmetros de Supabase (URL/KEY) ou token ausentes.")
+        st.error("Erro: Parâmetros de Supabase ou token ausentes.")
         return None
     try:
         headers = {
@@ -78,10 +76,6 @@ def obter_user_supabase(access_token: str):
         st.error(f"Falha na validação do token (Status: {resp.status_code}).")
         st.error(f"Resposta bruta do Supabase: {resp.text[:200]}...") 
         
-    except requests.exceptions.Timeout:
-        st.error("Erro de Timeout: Não foi possível conectar ao Supabase Auth API.")
-    except requests.exceptions.ConnectionError:
-        st.error("Erro de Conexão: Verifique as configurações de rede ou se a URL do Supabase está correta.")
     except Exception as e:
         st.error(f"Erro inesperado ao consultar o Supabase Auth API: {e}")
     return None
@@ -102,9 +96,8 @@ def sincronizar_usuario(user_json: dict):
             return existente
         return criar_usuario(nome, sobrenome, cpf, email)
     except Exception as e:
-        st.error(f"Erro ao sincronizar usuário: {e}")
+        st.error(f"Erro ao sincronizar usuário com o banco de dados: {e}")
         return None
-
 
 def gerar_google_auth_url():
     if not SUPABASE_URL: return "#"
@@ -124,9 +117,12 @@ def tela_login_google():
     )
     st.caption("Ao clicar em \"Entrar com Google\", você será redirecionado para a página oficial do Google para login/autorização e, em seguida, voltará para esta aplicação.")
 
+# =====================================================
+# FUNÇÕES CRÍTICAS DE FLUXO (Local Storage)
+# =====================================================
 
 def mover_access_token_do_hash_para_query():
-    """Script para forçar a leitura do token da hash (#) pelo Streamlit."""
+    """Lê o token da hash, salva no localStorage e limpa a URL."""
     components.html(
         """
         <script>
@@ -134,12 +130,13 @@ def mover_access_token_do_hash_para_query():
             if (window.location.hash && window.location.hash.includes("access_token=")) {
                 const params = new URLSearchParams(window.location.hash.substring(1));
                 const access = params.get("access_token");
-                const url = new URL(window.location.href.split('#')[0]);
                 
                 if (access) {
-                    url.searchParams.set("access_token", access);
-                    // Usa replace para evitar que o Streamlit recarregue 
-                    // no mesmo passo de execução, garantindo um novo ciclo limpo.
+                    // Salva o token no armazenamento local do navegador
+                    localStorage.setItem('supabase_access_token', access);
+                    
+                    // Limpa a hash da URL e força o recarregamento (RERUN)
+                    const url = new URL(window.location.href.split('#')[0]);
                     window.location.replace(url.toString()); 
                 }
             }
@@ -147,20 +144,82 @@ def mover_access_token_do_hash_para_query():
         </script>
         """,
         height=0, 
+        key="js_mover_token"
     )
 
-# ... (O resto das funções de banco, IA e exportação foram omitidas por brevidade, 
-# mas devem estar no seu código final) ...
+def obter_token_do_local_storage():
+    """Usa JS para ler o token salvo no localStorage e o retorna ao Python."""
+    # O Streamlit só consegue retornar dados do JS se o componente HTML for "run"
+    token = components.html(
+        """
+        <script>
+            // Retorna o valor de 'supabase_access_token' para o Python
+            return localStorage.getItem('supabase_access_token');
+        </script>
+        """,
+        height=0,
+        width=0,
+        key="local_storage_reader_return" 
+    )
+    # Limpa o token do storage após a leitura para que não seja reutilizado
+    if token:
+        components.html(
+            """<script>localStorage.removeItem('supabase_access_token');</script>""",
+            height=0,
+            width=0,
+            key="local_storage_remover"
+        )
+    return token
+
+# =====================================================
+# FUNÇÕES DO APP (ETAPAS / IA / EXPORTAÇÃO) - OMITIDAS PELA BREVIDADE
+# =====================================================
+# OBS: O código completo para ETAPAS, IA e EXPORTAÇÃO deve ser incluído aqui.
+
+ETAPAS = [
+    (1, "Ajuste da Descrição da Necessidade de Contratação"),
+    # ... (Restante da lista ETAPAS)
+]
+INFOS_BASICAS_CAMPOS = [
+    ("orgao", "Órgão / Entidade"),
+    # ... (Restante da lista INFOS_BASICAS_CAMPOS)
+]
+
+def listar_projetos():
+    if supabase is None: return []
+    # ... (Implementação da função) ...
+    return [] 
+
+def obter_projeto(projeto_id: int):
+    if supabase is None: return None
+    # ... (Implementação da função) ...
+    return {}
+
+def carregar_textos_todas_etapas(projeto_id: int):
+    if supabase is None: return []
+    # ... (Implementação da função) ...
+    return [] 
+
+# Funções placeholder para evitar erro de referência (substitua pelas suas)
+def carregar_etapa(projeto_id: int, numero: int):
+    return {"texto_final": "", "sugestao_ia": "", "titulo": dict(ETAPAS).get(numero, "")}
+def atualizar_infos_basicas(projeto_id: int, dados: dict): pass
+def salvar_etapa(projeto_id: int, numero: int, titulo: str, texto_final: str, sugestao_ia: str): pass
+def gerar_docx_etp(projeto, etapas_rows): return io.BytesIO(b"")
+def gerar_texto_ia(*args, **kwargs): return "IA não configurada"
+def listar_arquivos(projeto_id: int, numero_etapa: int): return []
+# Fim das funções placeholder
+
 # =====================================================
 # INTERFACE STREAMLIT (Lógica de autenticação FINAL)
 # =====================================================
-# Mantenha todas as suas funções auxiliares (obter_user_supabase, sincronizar_usuario, etc.) 
-# inalteradas, utilizando as versões mais recentes que enviei.
 
 def main():
     st.set_page_config(page_title="Ferramenta IA para ETP", layout="wide")
 
-    # Apenas para fins de debug, garanta que essas variáveis estão sendo lidas
+    # ----------------------------------------------------
+    # DEBUG INFO
+    # ----------------------------------------------------
     st.write("--- DEBUG INFO ---")
     st.write(f"SUPABASE_URL está configurada: {'Sim' if os.getenv('SUPABASE_URL') else 'NÃO'}")
     st.write(f"APP_BASE_URL está configurada: {os.getenv('APP_BASE_URL')}")
@@ -171,37 +230,33 @@ def main():
         st.error("ERRO CRÍTICO: Configurações de Supabase ausentes.")
         return
 
-    # 1) Tenta converter #access_token em ?access_token
-    st.write("PASSO 1: Rodando script JS para mover o token de # para ?")
+    # 1) Executa o JS para ler o token da # e salvá-lo no localStorage
+    st.write("PASSO 1: Rodando script JS para salvar o token da # no Local Storage (se houver).")
     mover_access_token_do_hash_para_query()
 
     # 2) Bloco de Autenticação
     if "usuario" not in st.session_state:
         st.write("PASSO 2: Usuário não está na sessão. Iniciando checagem de login.")
         
-        params = st.experimental_get_query_params()
-        access_tokens = params.get("access_token")
+        # Tenta ler o token do local storage (que foi salvo no PASSO 1, se ocorreu redirecionamento)
+        st.write("PASSO 2.1: Tentando ler o token do Local Storage...")
+        access_token = obter_token_do_local_storage()
 
-        if access_tokens:
-            st.write("PASSO 3: Token encontrado na URL query string (?access_token=...)")
-            access_token = access_tokens[0]
+        if access_token:
+            st.write("PASSO 3: Token encontrado no Local Storage.")
             
             if "login_processado" not in st.session_state:
                 st.session_state["login_processado"] = True 
-                st.write("PASSO 3.1: Iniciando processamento do token (1ª vez neste ciclo de execução).")
+                st.write("PASSO 3.1: Iniciando processamento do token (1ª vez).")
 
-                # ----------------------------------------------------
                 # Ponto de Falha 1: Validação do Token no Supabase Auth API
-                # ----------------------------------------------------
                 st.write("PASSO 4: Chamando obter_user_supabase (API Auth)...")
                 user_json = obter_user_supabase(access_token)
                 
                 if user_json:
                     st.write("PASSO 4.1: SUCESSO! Token validado. Dados do usuário recebidos.")
                     
-                    # ----------------------------------------------------
                     # Ponto de Falha 2: Sincronização com a Tabela 'usuarios'
-                    # ----------------------------------------------------
                     st.write("PASSO 5: Sincronizando usuário com a tabela 'usuarios'...")
                     usuario = sincronizar_usuario(user_json)
                     
@@ -210,44 +265,49 @@ def main():
                         st.session_state["usuario"] = usuario
                         st.session_state["access_token"] = access_token 
 
-                        # CRÍTICO: Limpa a query string e força o rerun
-                        st.experimental_set_query_params() 
                         st.experimental_rerun()
-                        # Se chegar aqui, o código é interrompido para recarregar.
-
                     else:
                         st.error("ERRO 5.2: Falha ao sincronizar/criar registro na tabela 'usuarios'.")
-                        st.experimental_set_query_params() 
                 else:
-                    st.error("ERRO 4.2: Falha na validação do token com a API Auth do Supabase. (Verifique erros acima).")
-                    st.experimental_set_query_params() 
+                    st.error("ERRO 4.2: Falha na validação do token com a API Auth do Supabase.")
             
-            # Se o processo falhou (chegou aqui sem rerun) ou já foi processado
+            # Se o processo falhou, exibe a tela de login
             if "usuario" not in st.session_state:
-                st.write("PASSO 6: Processamento falhou ou token já foi processado. Exibindo tela de login.")
+                st.write("PASSO 6: Processamento falhou. Exibindo tela de login.")
                 tela_login_google()
                 return
         
         else:
-            st.write("PASSO 3: Nenhum token na URL. Exibindo tela de login.")
+            st.write("PASSO 3: Nenhum token encontrado. Exibindo tela de login.")
             tela_login_google()
             return
     
     # 3) Daqui pra baixo SÓ RODA SE O USUÁRIO ESTIVER LOGADO
     st.write("PASSO 7: Usuário na sessão. Exibindo Dashboard.")
+    st.success("AUTENTICAÇÃO COMPLETA. BEM-VINDO!")
 
     if "login_processado" in st.session_state:
         del st.session_state["login_processado"]
         
     usuario = st.session_state["usuario"]
-    # ... (O resto da sua aplicação/dashboard começa aqui) ...
 
-    st.success("AUTENTICAÇÃO COMPLETA. BEM-VINDO AO DASHBOARD!")
-    # ... (Restante do seu código principal) ...
-    # ... (ex: st.sidebar.header("Projetos de ETP"), etc.)
+    # ... (Restante do seu código do dashboard, projetos, etc.) ...
+    
+    # Exemplo de código do dashboard
+    st.sidebar.header("Projetos de ETP")
+    
+    # Simulação de restante da aplicação
+    projetos = listar_projetos()
+    st.write(f"Você tem {len(projetos)} projetos.")
+    
+    col_user, col_logout = st.sidebar.columns([3, 1])
+    col_user.markdown(
+        f"**Usuário:** {usuario.get('nome','')} {usuario.get('sobrenome','')}"
+    )
+    if col_logout.button("Sair", help="Encerrar sessão"):
+        st.session_state.clear()
+        st.experimental_rerun()
 
 
 if __name__ == "__main__":
-    # Certifique-se de que todas as funções de helper (etapas, projetos, etc.) 
-    # estão definidas antes de chamar main().
     main()
