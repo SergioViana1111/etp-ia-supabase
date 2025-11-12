@@ -1,3 +1,4 @@
+
 import os
 import io
 import tempfile
@@ -15,17 +16,38 @@ import streamlit.components.v1 as components
 # ==========================
 # CONFIG
 # ==========================
+st.set_page_config(page_title="Ferramenta Inteligente para Elaboração de ETP", layout="wide")
+
 SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY")
 APP_BASE_URL = (os.getenv("APP_BASE_URL") or st.secrets.get("APP_BASE_URL")
                 or "https://etp-com-ia.streamlit.app")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    st.set_page_config(page_title="Ferramenta ETP", layout="wide")
-    st.error("SUPABASE_URL e/ou SUPABASE_KEY não configuradas.")
+    st.error("SUPABASE_URL e/ou SUPABASE_KEY não configuradas nos secrets.")
     st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ==========================
+# FIX: converter #access_token -> ?access_token (quando vem do Google Auth)
+# ==========================
+components.html(\"\"\"
+<script>
+(function(){
+  try{
+    var w = window.parent || window.top || window;
+    var h = w.location.hash || "";
+    if(h && h.indexOf("access_token=")>=0){
+      var qs = h.substring(1);
+      var base = w.location.origin + w.location.pathname;
+      w.history.replaceState({}, "", base + "?" + qs);
+      w.location.reload();
+    }
+  }catch(e){ console.warn("hash->query (parent) error", e); }
+})();
+</script>
+\"\"\", height=0)
 
 # ==========================
 # ETAPAS
@@ -53,7 +75,7 @@ ORIENTACOES = {
     6: "Detalhe a metodologia de estimativa de valor (cotações, bancos de preços, etc.).",
     7: "Mostre como a contratação está alinhada ao PCA / planejamento institucional.",
     8: "Justifique o parcelamento ou a contratação em lote único, com base na legislação.",
-    9: "Indique contratações relacionadas, dependências e impactos.",
+    9: "Indique contratações relacionadas, dependências e impactos interdependentes.",
     10: "Identifique os riscos e as medidas de mitigação associadas à contratação.",
     11: "Justifique a escolha da solução em relação a alternativas e critérios adotados.",
     12: "Faça o resumo final e consolide as principais conclusões do ETP.",
@@ -67,47 +89,161 @@ INFOS_BASICAS_CAMPOS = [
 ]
 
 # ==========================
-# HELPERS: AUTH / GOOGLE
+# DB HELPERS (RLS-friendly)
 # ==========================
-# Converte #access_token -> ?access_token quando o app está dentro de um iframe (Streamlit Cloud)
-components.html("""
-<script>
-(function(){
-  try{
-    var w = window.parent || window.top || window;
-    var h = w.location.hash || "";
-    if (h && h.indexOf("access_token=")>=0){
-      var qs = h.substring(1);
-      var base = w.location.origin + w.location.pathname;
-      w.history.replaceState({}, "", base + "?" + qs);
-      w.location.reload();
-    }
-  }catch(e){ console.warn("hash->query error", e); }
-})();
-</script>
-""", height=0)
+def _require_session():
+    token = st.session_state.get("access_token")
+    if not token:
+        st.warning("Sessão expirada. Faça login novamente.")
+        st.session_state.clear()
+        st.experimental_set_query_params()
+        st.rerun()
+    supabase.postgrest.auth(token)  # importante para RLS
+    return token
 
+def listar_projetos():
+    _require_session()
+    user_id = st.session_state.get("auth_user_id")
+    if not user_id: 
+        return []
+    return (
+        supabase.table("projetos")
+        .select("id, nome, criado_em")
+        .eq("user_id", user_id)
+        .order("criado_em", desc=True)
+        .execute()
+    ).data or []
+
+def obter_projeto(projeto_id: int):
+    _require_session()
+    return (
+        supabase.table("projetos")
+        .select("*")
+        .eq("id", projeto_id)
+        .single()
+        .execute()
+    ).data
+
+def criar_projeto(nome: str):
+    _require_session()
+    user_id = st.session_state.get("auth_user_id")
+    if not user_id:
+        st.error("Usuário não autenticado.")
+        st.stop()
+    return (
+        supabase.table("projetos")
+        .insert({"nome": nome, "user_id": user_id})
+        .execute()
+    ).data[0]["id"]
+
+def excluir_projeto(projeto_id: int):
+    _require_session()
+    user_id = st.session_state.get("auth_user_id")
+    supabase.table("projetos").delete().eq("id", projeto_id).eq("user_id", user_id).execute()
+
+def atualizar_infos_basicas(projeto_id: int, dados: dict):
+    _require_session()
+    user_id = st.session_state.get("auth_user_id")
+    supabase.table("projetos").update(
+        {
+            "orgao": dados.get("orgao"),
+            "unidade": dados.get("unidade"),
+            "processo": dados.get("processo"),
+            "responsavel": dados.get("responsavel"),
+            "objeto": dados.get("objeto"),
+        }
+    ).eq("id", projeto_id).eq("user_id", user_id).execute()  # <- fix: só o projeto atual
+
+def carregar_etapa(projeto_id: int, numero: int):
+    _require_session()
+    resp = (
+        supabase.table("etapas")
+        .select("texto_final, sugestao_ia, titulo")
+        .eq("projeto_id", projeto_id)
+        .eq("numero", numero)
+        .execute()
+    ).data
+    if resp:
+        row = resp[0]
+        return {
+            "texto_final": row.get("texto_final") or "",
+            "sugestao_ia": row.get("sugestao_ia") or "",
+            "titulo": row.get("titulo") or dict(ETAPAS)[numero],
+        }
+    return {"texto_final": "", "sugestao_ia": "", "titulo": dict(ETAPAS)[numero]}
+
+def salvar_etapa(projeto_id: int, numero: int, titulo: str, texto_final: str, sugestao_ia: str):
+    _require_session()
+    payload = {
+        "projeto_id": projeto_id,
+        "numero": numero,
+        "titulo": titulo,
+        "texto_final": texto_final,
+        "sugestao_ia": sugestao_ia,
+        "atualizado_em": datetime.utcnow().isoformat(),
+    }
+    existe = (
+        supabase.table("etapas").select("id").eq("projeto_id", projeto_id).eq("numero", numero).execute()
+    ).data
+    if existe:
+        supabase.table("etapas").update(payload).eq("projeto_id", projeto_id).eq("numero", numero).execute()
+    else:
+        supabase.table("etapas").insert(payload).execute()
+
+def salvar_arquivo(projeto_id: int, numero_etapa: int, file):
+    _require_session()
+    supabase.table("arquivos").insert(
+        {
+            "projeto_id": projeto_id,
+            "numero_etapa": numero_etapa,
+            "nome_original": file.name,
+            "upload_em": datetime.utcnow().isoformat(),
+        }
+    ).execute()
+
+def listar_arquivos(projeto_id: int, numero_etapa: int):
+    _require_session()
+    return (
+        supabase.table("arquivos")
+        .select("id, nome_original")
+        .eq("projeto_id", projeto_id)
+        .eq("numero_etapa", numero_etapa)
+        .order("upload_em", desc=True)
+        .execute()
+    ).data or []
+
+def carregar_textos_todas_etapas(projeto_id: int):
+    _require_session()
+    return (
+        supabase.table("etapas")
+        .select("numero, titulo, texto_final")
+        .eq("projeto_id", projeto_id)
+        .order("numero")
+        .execute()
+    ).data or []
+
+# ==========================
+# USERS (Auth)
+# ==========================
 def gerar_google_auth_url():
     redirect_enc = quote(APP_BASE_URL, safe="")
     return f"{SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to={redirect_enc}"
 
 def obter_user_supabase(access_token: str):
-    if not access_token:
+    try:
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {access_token}"}
+        r = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers=headers, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
         return None
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {access_token}"}
-    r = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers=headers, timeout=10)
-    return r.json() if r.status_code == 200 else None
+    return None
 
 def obter_usuario_por_email(email: str):
-    return (
-        supabase.table("usuarios")
-        .select("*")
-        .eq("email", email)
-        .limit(1)
-        .execute()
-    ).data[0] if email and (
-        supabase.table("usuarios").select("*").eq("email", email).limit(1).execute().data
-    ) else None
+    if not email: return None
+    resp = supabase.table("usuarios").select("*").eq("email", email).limit(1).execute()
+    data = resp.data or []
+    return data[0] if data else None
 
 def criar_usuario(nome: str, sobrenome: str, cpf: str, email: str):
     return supabase.table("usuarios").insert(
@@ -126,141 +262,21 @@ def sincronizar_usuario(user_json: dict):
     existente = obter_usuario_por_email(email) if email else None
     return existente or criar_usuario(nome, sobrenome, "", email)
 
-def tela_login_google():
-    st.set_page_config(page_title="Ferramenta ETP", layout="wide")
-    st.title("Ferramenta Inteligente para Elaboração de ETP")
-    st.subheader("Acesse com sua conta Google")
-    st.link_button("🔐 Entrar com Google", gerar_google_auth_url())
-    st.caption("Você será redirecionado ao Google e voltará para este app.")
-
 # ==========================
-# DB (RLS compatível)
-# ==========================
-def listar_projetos():
-    user_id = st.session_state.get("auth_user_id")
-    if not user_id:
-        return []
-    return (
-        supabase.table("projetos")
-        .select("id, nome, criado_em")
-        .eq("user_id", user_id)
-        .order("criado_em", desc=True)
-        .execute()
-    ).data or []
-
-def criar_projeto(nome: str):
-    user_id = st.session_state.get("auth_user_id")
-    if not user_id:
-        # tenta restaurar do token
-        tok = st.session_state.get("access_token")
-        if tok:
-            uj = obter_user_supabase(tok)
-            if uj:
-                user_id = uj.get("id")
-                st.session_state["auth_user_id"] = user_id
-    if not user_id:
-        st.error("Sessão inválida. Faça login novamente.")
-        st.stop()
-    return (
-        supabase.table("projetos")
-        .insert({"nome": nome, "user_id": user_id})
-        .execute()
-    ).data[0]["id"]
-
-def obter_projeto(projeto_id: int):
-    return (
-        supabase.table("projetos")
-        .select("*")
-        .eq("id", projeto_id)
-        .single()
-        .execute()
-    ).data
-
-def excluir_projeto(projeto_id: int):
-    supabase.table("projetos").delete().eq("id", projeto_id).execute()
-
-def atualizar_infos_basicas(projeto_id: int, dados: dict):
-    supabase.table("projetos").update(dados).eq("id", projeto_id).execute()
-
-def carregar_etapa(projeto_id: int, numero: int):
-    resp = (
-        supabase.table("etapas")
-        .select("texto_final, sugestao_ia, titulo")
-        .eq("projeto_id", projeto_id)
-        .eq("numero", numero)
-        .execute()
-    ).data
-    if resp:
-        row = resp[0]
-        return {
-            "texto_final": row.get("texto_final") or "",
-            "sugestao_ia": row.get("sugestao_ia") or "",
-            "titulo": row.get("titulo") or dict(ETAPAS)[numero],
-        }
-    return {"texto_final": "", "sugestao_ia": "", "titulo": dict(ETAPAS)[numero]}
-
-def salvar_etapa(projeto_id: int, numero: int, titulo: str, texto_final: str, sugestao_ia: str):
-    payload = {
-        "projeto_id": projeto_id,
-        "numero": numero,
-        "titulo": titulo,
-        "texto_final": texto_final,
-        "sugestao_ia": sugestao_ia,
-        "atualizado_em": datetime.utcnow().isoformat(),
-    }
-    existe = (
-        supabase.table("etapas")
-        .select("id")
-        .eq("projeto_id", projeto_id).eq("numero", numero)
-        .execute()
-    ).data
-    if existe:
-        supabase.table("etapas").update(payload).eq("projeto_id", projeto_id).eq("numero", numero).execute()
-    else:
-        supabase.table("etapas").insert(payload).execute()
-
-def salvar_arquivo(projeto_id: int, numero_etapa: int, file):
-    supabase.table("arquivos").insert(
-        {
-            "projeto_id": projeto_id,
-            "numero_etapa": numero_etapa,
-            "nome_original": file.name,
-            "upload_em": datetime.utcnow().isoformat(),
-        }
-    ).execute()
-
-def listar_arquivos(projeto_id: int, numero_etapa: int):
-    return (
-        supabase.table("arquivos")
-        .select("id, nome_original")
-        .eq("projeto_id", projeto_id).eq("numero_etapa", numero_etapa)
-        .order("upload_em", desc=True)
-        .execute()
-    ).data or []
-
-def carregar_textos_todas_etapas(projeto_id: int):
-    return (
-        supabase.table("etapas")
-        .select("numero, titulo, texto_final")
-        .eq("projeto_id", projeto_id)
-        .order("numero")
-        .execute()
-    ).data or []
-
-# ==========================
-# IA (OpenAI Responses API)
+# IA
 # ==========================
 def gerar_texto_ia(numero_etapa, nome_etapa, orientacao, texto_existente, infos_basicas, arquivos_etapa):
     api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
     if not api_key:
         return "⚠️ OPENAI_API_KEY não configurada."
     client = OpenAI(api_key=api_key)
-    arquivos_lista = ", ".join(a["nome_original"] for a in arquivos_etapa) if arquivos_etapa else "nenhum arquivo enviado"
+
+    arquivos_lista = ", ".join(a["nome_original"] for a in arquivos_etapa) if arquivos_etapa else "nenhum"
     system_prompt = (
-        "Você é uma IA especialista em ETP para a Administração Pública brasileira. "
+        "Você é uma IA especialista em elaboração de ETP para a Administração Pública brasileira. "
         "Gere textos claros, objetivos e alinhados à legislação de contratações públicas."
     )
-    user_prompt = f"""
+    user_prompt = f\"\"\"
 Informações básicas:
 - Órgão: {infos_basicas.get('orgao') or '-'}
 - Unidade: {infos_basicas.get('unidade') or '-'}
@@ -277,14 +293,16 @@ Texto atual do usuário (se houver):
 {texto_existente or '[vazio]'}
 
 Tarefa: gere o texto final desta etapa, pronto para uso no ETP.
-""".strip()
+\"\"\".strip()
+
     try:
         r = client.responses.create(
             model="gpt-5",
-            input=[{"role": "system", "content": system_prompt},
-                   {"role": "user", "content": user_prompt}],
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
         )
-        # compat: extrai texto independentemente do formato
         if hasattr(r, "output_text") and r.output_text:
             return r.output_text.strip()
         outs = getattr(r, "output", None) or getattr(r, "outputs", None) or []
@@ -298,7 +316,8 @@ Tarefa: gere o texto final desta etapa, pronto para uso no ETP.
                     partes.append(t)
                 elif isinstance(t, dict):
                     partes.append(t.get("value") or t.get("text") or "")
-        return ("\n".join([p for p in partes if p]) or "⚠️ IA não retornou texto.").strip()
+        texto = "\\n".join([p for p in partes if p]).strip()
+        return texto or "⚠️ A IA não retornou texto."
     except Exception as e:
         return f"⚠️ Erro ao chamar a IA: {e}"
 
@@ -319,7 +338,7 @@ def gerar_docx_etp(projeto, etapas_rows):
         titulo = row["titulo"]
         texto_final = row.get("texto_final") or "[Texto ainda não preenchido]"
         doc.add_heading(f"Etapa {numero} – {titulo}", level=1)
-        for par in texto_final.split("\n\n"):
+        for par in texto_final.split("\\n\\n"):
             doc.add_paragraph(par)
     buf = io.BytesIO()
     doc.save(buf); buf.seek(0)
@@ -341,10 +360,86 @@ def gerar_pdf_etp(projeto, etapas_rows):
         return None, str(e)
 
 # ==========================
-# UI
+# TELAS DE AUTENTICAÇÃO (Email/Senha + Google)
+# ==========================
+def tela_login_ou_cadastro():
+    st.title("Ferramenta Inteligente para Elaboração de ETP")
+    st.subheader("Acesse sua conta")
+
+    tabs = st.tabs(["🔑 Entrar", "🆕 Cadastrar", "🔗 Entrar com Google"])
+
+    # Entrar
+    with tabs[0]:
+        email = st.text_input("E-mail", key="login_email")
+        senha = st.text_input("Senha", type="password", key="login_senha")
+        colA, colB = st.columns([1,1])
+        if colA.button("Entrar"):
+            try:
+                res = supabase.auth.sign_in_with_password({"email": email, "password": senha})
+                if res and res.session and res.session.access_token:
+                    token = res.session.access_token
+                    user_json = obter_user_supabase(token)
+                    if user_json:
+                        st.session_state["usuario"] = user_json
+                        st.session_state["auth_user_id"] = user_json.get("id")
+                        st.session_state["access_token"] = token
+                        st.experimental_set_query_params()
+                        st.rerun()
+                    else:
+                        st.error("Não foi possível obter os dados do usuário.")
+                else:
+                    st.error("E-mail/senha inválidos ou e-mail não confirmado.")
+            except Exception as e:
+                msg = str(e)
+                if "Email not confirmed" in msg or "email not confirmed" in msg:
+                    st.warning("Seu e-mail ainda não foi confirmado. Verifique sua caixa de entrada.")
+                else:
+                    st.error(f"Erro ao autenticar: {msg}")
+
+        if colB.button("Esqueci minha senha"):
+            if not email:
+                st.info("Informe seu e-mail acima e clique novamente.")
+            else:
+                try:
+                    supabase.auth.reset_password_email(email, {"redirect_to": APP_BASE_URL})
+                    st.success("Enviamos um e-mail com instruções para redefinir a senha.")
+                except Exception as e:
+                    st.error(f"Não foi possível enviar o e-mail de redefinição: {e}")
+
+    # Cadastrar
+    with tabs[1]:
+        nome = st.text_input("Nome")
+        sobrenome = st.text_input("Sobrenome")
+        email_cad = st.text_input("E-mail", key="cad_email")
+        senha_cad = st.text_input("Senha", type="password", key="cad_senha")
+        if st.button("Cadastrar"):
+            try:
+                res = supabase.auth.sign_up({
+                    "email": email_cad,
+                    "password": senha_cad,
+                    "options": {"data": {"full_name": f"{nome} {sobrenome}".strip()}, "emailRedirectTo": APP_BASE_URL}
+                })
+                if res and res.user:
+                    try:
+                        supabase.auth.resend({"type": "signup", "email": email_cad, "options": {"emailRedirectTo": APP_BASE_URL}})
+                    except Exception:
+                        pass
+                    st.success("Conta criada! Confirme o e-mail para entrar.")
+                else:
+                    st.error("Não foi possível criar a conta. Verifique os dados.")
+            except Exception as e:
+                st.error(f"Erro ao cadastrar: {e}")
+
+    # Google
+    with tabs[2]:
+        st.write("Ou entre com sua conta Google (via Supabase Auth).")
+        st.link_button("🔐 Entrar com Google", gerar_google_auth_url())
+
+# ==========================
+# MAIN
 # ==========================
 def main():
-    # 1) Recupera token do callback (?access_token=...)
+    # Callback do Google (?access_token=...)
     params = st.experimental_get_query_params()
     access_tokens = params.get("access_token")
     if "usuario" not in st.session_state and access_tokens:
@@ -356,25 +451,15 @@ def main():
             st.session_state["access_token"] = token
             st.experimental_set_query_params()
 
-    # 2) Exige login
+    # Requer login
     if "usuario" not in st.session_state:
-        tela_login_google()
+        tela_login_ou_cadastro()
         return
 
-    # 3) RLS: autentica PostgREST com o token do usuário
-    token = st.session_state.get("access_token")
-    if token:
-        supabase.postgrest.auth(token)
-    else:
-        st.warning("Sessão expirada. Faça login novamente.")
-        st.session_state.clear()
-        st.experimental_set_query_params()
-        st.rerun()
+    # Garante RLS em toda run
+    _require_session()
 
     usuario = st.session_state["usuario"]
-
-    st.set_page_config(page_title="Ferramenta ETP", layout="wide")
-    st.title("Ferramenta Inteligente para Elaboração de ETP")
 
     # Sidebar: usuário
     st.sidebar.markdown(f"**Usuário:** {usuario.get('email','')}")
@@ -383,7 +468,7 @@ def main():
         st.experimental_set_query_params()
         st.rerun()
 
-    # Sidebar: projetos (somente NOME visível)
+    # Sidebar: projetos (somente nome visível)
     st.sidebar.header("Projetos de ETP")
     projetos = listar_projetos()
     nomes = [p["nome"] for p in projetos]
@@ -424,9 +509,10 @@ def main():
 
     # Seleção de etapa
     st.sidebar.markdown("---")
-    numero_etapa = st.sidebar.selectbox("Etapa",
-        [n for n,_ in ETAPAS],
-        format_func=lambda n: f"{n} - {dict(ETAPAS)[n]}")
+    numero_etapa = st.sidebar.selectbox(
+        "Etapa", [n for n, _ in ETAPAS],
+        format_func=lambda n: f"{n} - {dict(ETAPAS)[n]}",
+    )
     nome_etapa = dict(ETAPAS)[numero_etapa]
     orientacao = ORIENTACOES.get(numero_etapa, "")
 
@@ -527,7 +613,7 @@ def main():
         if st.button("Gerar PDF do ETP"):
             pdf_buf, err = gerar_pdf_etp(projeto, etapas_rows)
             if err or pdf_buf is None:
-                st.error("Erro ao converter DOCX para PDF no servidor. Baixe o DOCX e converta localmente.\n" + str(err))
+                st.error("Erro ao converter DOCX para PDF no servidor. Baixe o DOCX e converta localmente.\\n" + str(err))
             else:
                 st.download_button("Baixar ETP em PDF", data=pdf_buf, file_name=f"etp_projeto_{projeto_id}.pdf", mime="application/pdf")
 
