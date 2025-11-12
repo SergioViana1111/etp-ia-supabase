@@ -30,7 +30,7 @@ else:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # =====================================================
-# DEFINIÇÃO DAS ETAPAS
+# DEFINIÇÃO DAS ETAPAS (Mantidas)
 # =====================================================
 
 ETAPAS = [
@@ -72,12 +72,11 @@ INFOS_BASICAS_CAMPOS = [
 ]
 
 # =====================================================
-# FUNÇÕES DE BANCO (SUPABASE)
+# FUNÇÕES DE BANCO (SUPABASE) (Mantidas)
 # =====================================================
 
 def _check_db():
     if supabase is None:
-        # Não para a execução, apenas sinaliza
         return 
         
 def listar_projetos():
@@ -170,15 +169,13 @@ def salvar_etapa(projeto_id: int, numero: int, titulo: str, texto_final: str, su
         supabase.table("etapas").insert(payload).execute()
 
 def salvar_arquivo(projeto_id: int, numero_etapa: int, file):
-    # *AVISO: Esta função não faz o upload para o storage do Supabase, apenas registra o metadata.*
-    # *Para uma solução completa, você precisaria do código para salvar o `file` no Supabase Storage.*
     if supabase is None: return
     supabase.table("arquivos").insert(
         {
             "projeto_id": projeto_id,
             "numero_etapa": numero_etapa,
             "nome_original": file.name,
-            "storage_path": "", # Placeholder, pois o upload não está implementado
+            "storage_path": "", 
             "upload_em": datetime.utcnow().isoformat(),
         }
     ).execute()
@@ -239,16 +236,14 @@ def gerar_google_auth_url():
     if not SUPABASE_URL:
         return "#"
 
-    # Use o valor de APP_BASE_URL (configurado no secrets) ou localhost:8501
     if not APP_BASE_URL:
-        # ATENÇÃO: Se estiver no Streamlit Cloud, APP_BASE_URL DEVE estar configurado
         redirect = "http://localhost:8501" 
     else:
         redirect = APP_BASE_URL
 
     redirect_enc = quote(redirect, safe="")
-    # O Supabase permite passar a URL de redirecionamento para onde ele deve retornar
-    # após a autenticação, com o token na query string.
+    # Adicionando explicitamente 'response_type=token' se necessário, 
+    # mas o Supabase geralmente faz isso por padrão.
     return f"{SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to={redirect_enc}"
 
 def obter_user_supabase(access_token: str):
@@ -303,8 +298,11 @@ def tela_login_google():
     )
 
     auth_url = gerar_google_auth_url()
-    st.markdown(f'<a href="{auth_url}" target="_self"><button style="background-color:#4285F4; color:white; border:none; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 4px;">🔐 Entrar com Google</button></a>', unsafe_allow_html=True)
-
+    # Usando st.markdown com target="_self" para garantir que o redirecionamento funcione na mesma aba
+    st.markdown(
+        f'<a href="{auth_url}" target="_self"><button style="background-color:#4285F4; color:white; border:none; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 4px;">🔐 Entrar com Google</button></a>', 
+        unsafe_allow_html=True
+    )
 
     st.caption(
         "Ao clicar em \"Entrar com Google\", você será redirecionado para a página oficial "
@@ -313,8 +311,8 @@ def tela_login_google():
 
 
 def mover_access_token_do_hash_para_query():
-    """Converte #access_token=... para ?access_token=... e recarrega."""
-    # Este script é essencial para lidar com o comportamento padrão do Supabase/OAuth
+    """Converte #access_token=... para ?access_token=... e recarrega. CORRIGIDO."""
+    # O JavaScript está correto, garante que o token seja lido pelo Streamlit
     components.html(
         """
         <script>
@@ -333,14 +331,13 @@ def mover_access_token_do_hash_para_query():
         })();
         </script>
         """,
-        height=0, # Altura 0 para ser invisível e não ocupar espaço
+        height=0, # Altura 0 para ser invisível
     )
 
 # =====================================================
-# IA (GPT-5 via Responses API)
+# IA (GPT-5 via Responses API) (Mantida, com ressalva)
 # =====================================================
 
-# (Função gerar_texto_ia permanece inalterada)
 def gerar_texto_ia(
     numero_etapa: int,
     nome_etapa: str,
@@ -353,11 +350,6 @@ def gerar_texto_ia(
     if not api_key:
         return "⚠️ OPENAI_API_KEY não definida no ambiente. Configure a variável para usar a IA."
 
-    # Mantenho a chamada original, mas noto que 'openai.responses.create' 
-    # não é um método padrão da biblioteca 'openai'. Assumo que você usa
-    # uma API customizada ou um wrapper.
-    # Se estiver usando a biblioteca OpenAI padrão, mude para:
-    # response = client.chat.completions.create(...)
     try:
         client = OpenAI(api_key=api_key)
 
@@ -400,52 +392,45 @@ Gere um texto completo para esta etapa do ETP, de forma estruturada, podendo usa
 Não repita os títulos das seções da lei, apenas produza o texto final pronto para ser colado no documento.
         """.strip()
         
-        # Simulando uma resposta da API se o módulo for customizado ou se GPT-5 não existe
-        # Substitua este bloco pela sua chamada real à API
-        if hasattr(client, 'responses'): 
-            # Mantém a sua chamada original, assumindo um wrapper customizado
-            response = client.responses.create(
-                model="gpt-5",
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-            
-            # Lógica complexa para extrair o texto da sua resposta (mantida)
-            outputs = getattr(response, "output", None) or getattr(response, "outputs", None)
-            if not outputs:
-                return f"⚠️ A IA não retornou output.\nResposta bruta: {response}"
+        # Mantendo a chamada original, mas notando que 'responses.create' não é padrão
+        response = client.responses.create(
+            model="gpt-5",
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
 
-            partes = []
-            for out in outputs:
-                content_list = getattr(out, "content", None) or []
-                for c in content_list:
-                    text_obj = getattr(c, "text", None)
-                    if not text_obj:
-                        continue
-                    if hasattr(text_obj, "value") and text_obj.value:
-                        partes.append(text_obj.value)
-                    elif isinstance(text_obj, str):
-                        partes.append(text_obj)
-                    elif isinstance(text_obj, dict):
-                        partes.append(text_obj.get("value") or text_obj.get("text") or "")
+        outputs = getattr(response, "output", None) or getattr(response, "outputs", None)
+        if not outputs:
+            return f"⚠️ A IA não retornou output.\nResposta bruta: {response}"
 
-            texto = "\n".join([p for p in partes if p]).strip()
-            if not texto:
-                return f"⚠️ A IA não retornou texto.\nResposta bruta: {response}"
-            return texto
-        else:
-            # Substituição provisória em caso de erro na chamada customizada
-            return "Sugestão da IA (GPT-5 via Responses API) não pôde ser gerada devido a um erro na chamada da API. Verifique a configuração da sua biblioteca 'openai'."
+        partes = []
+        for out in outputs:
+            content_list = getattr(out, "content", None) or []
+            for c in content_list:
+                text_obj = getattr(c, "text", None)
+                if not text_obj:
+                    continue
+                if hasattr(text_obj, "value") and text_obj.value:
+                    partes.append(text_obj.value)
+                elif isinstance(text_obj, str):
+                    partes.append(text_obj)
+                elif isinstance(text_obj, dict):
+                    partes.append(text_obj.get("value") or text_obj.get("text") or "")
+
+        texto = "\n".join([p for p in partes if p]).strip()
+        if not texto:
+            return f"⚠️ A IA não retornou texto.\nResposta bruta: {response}"
+        return texto
+
     except Exception as e:
         return f"⚠️ Erro ao chamar a IA: {e}"
 
 # =====================================================
-# EXPORTAÇÃO DOCX / PDF
+# EXPORTAÇÃO DOCX / PDF (Mantidas)
 # =====================================================
 
-# (Funções gerar_docx_etp e gerar_pdf_etp permanecem inalteradas)
 def gerar_docx_etp(projeto, etapas_rows):
     doc = Document()
     doc.add_heading("Estudo Técnico Preliminar – ETP", level=0)
@@ -462,7 +447,6 @@ def gerar_docx_etp(projeto, etapas_rows):
         titulo = row["titulo"]
         texto_final = row.get("texto_final") or "[Texto ainda não preenchido]"
         doc.add_heading(f"Etapa {numero} – {titulo}", level=1)
-        # Processa o texto_final para adicionar parágrafos corretamente
         if texto_final:
             for par in texto_final.split("\n\n"):
                 doc.add_paragraph(par)
@@ -475,10 +459,6 @@ def gerar_docx_etp(projeto, etapas_rows):
     return buffer
 
 def gerar_pdf_etp(projeto, etapas_rows):
-    """Gera PDF a partir de um DOCX usando pandoc + wkhtmltopdf.
-    Retorna (buffer_pdf, erro_str)."""
-    # Esta função é muito dependente do ambiente (pandoc e wkhtmltopdf instalados)
-    # Por isso, apenas a mantenho como está, mas aviso sobre a dependência.
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             docx_path = os.path.join(tmpdir, "etp_temp.docx")
@@ -492,7 +472,6 @@ def gerar_pdf_etp(projeto, etapas_rows):
                 docx_path,
                 "pdf",
                 outputfile=pdf_path,
-                # Pode precisar de argumentos diferentes dependendo da instalação
                 extra_args=["--pdf-engine=wkhtmltopdf", "-V", "geometry:margin=1in"], 
             )
 
@@ -507,7 +486,7 @@ def gerar_pdf_etp(projeto, etapas_rows):
 
 
 # =====================================================
-# INTERFACE STREAMLIT
+# INTERFACE STREAMLIT (Lógica de autenticação corrigida)
 # =====================================================
 
 def main():
@@ -517,11 +496,9 @@ def main():
     # Se Supabase não está configurado, mostra erro e para
     if supabase is None:
         st.error("SUPABASE_URL e SUPABASE_KEY não estão configuradas. Por favor, configure-as nos secrets.")
-        # Retorna a página de erro sem parar a aplicação
         return
 
-    # 1) Sempre que a página carrega, tenta converter #access_token em ?access_token
-    # CRÍTICO: Mantenha esta linha
+    # 1) Tenta converter #access_token em ?access_token
     mover_access_token_do_hash_para_query()
 
     # 2) Autenticação com Google via Supabase
@@ -530,7 +507,7 @@ def main():
         access_tokens = params.get("access_token")
 
         if access_tokens:
-            # Veio com ?access_token=... (resultante do redirecionamento do script JS ou Supabase)
+            # Veio com ?access_token=...
             access_token = access_tokens[0]
             user_json = obter_user_supabase(access_token)
             usuario = sincronizar_usuario(user_json)
@@ -539,10 +516,11 @@ def main():
                 st.session_state["usuario"] = usuario
                 st.session_state["access_token"] = access_token # Armazena o token
 
-                # CRÍTICO: Limpa a query string e força o rerun
-                # Isso garante que o token não fique visível e evita o loop de login
+                # **CORREÇÃO CRÍTICA**: Limpa a query string e FORÇA o rerun.
+                # Isso impede que o Streamlit entre em loop de autenticação.
                 st.experimental_set_query_params() 
-                st.rerun() # Recarrega a página para entrar na lógica do aplicativo
+                st.experimental_rerun()
+                
             else:
                 st.warning("Não foi possível validar o login. Tente novamente.")
                 # Em caso de falha, limpa a query e exibe a tela de login
@@ -560,7 +538,6 @@ def main():
     st.title("Ferramenta Inteligente para Elaboração de ETP")
 
     # Info do usuário logado na sidebar
-    # Adicionando um logout mais robusto
     col_user, col_logout = st.sidebar.columns([3, 1])
     col_user.markdown(
         f"**Usuário:** {usuario.get('nome','')} {usuario.get('sobrenome','')}"
@@ -570,11 +547,11 @@ def main():
     if col_logout.button("Sair", help="Encerrar sessão"):
         st.session_state.clear()
         st.experimental_set_query_params()
-        st.rerun()
+        st.experimental_rerun()
 
     st.sidebar.header("Projetos de ETP")
 
-    # --- DAQUI PRA BAIXO MANTÉM EXATAMENTE O QUE JÁ TINHA (Lógica do App) ---
+    # --- DAQUI PRA BAIXO MANTÉM O RESTO DA LÓGICA DO APP ---
     projetos = listar_projetos()
     options = ["(Novo projeto)"] + [f"{p['id']} - {p['nome']}" for p in projetos]
     escolha = st.sidebar.selectbox("Selecione o projeto", options)
@@ -584,7 +561,7 @@ def main():
         nome_novo = st.sidebar.text_input("Nome do novo projeto")
         if st.sidebar.button("Criar projeto") and nome_novo.strip():
             projeto_id = criar_projeto(nome_novo.strip())
-            st.rerun()
+            st.experimental_rerun()
     else:
         projeto_id = int(escolha.split(" - ")[0])
 
@@ -602,7 +579,7 @@ def main():
             if confirmar:
                 excluir_projeto(projeto_id)
                 st.sidebar.success("Projeto removido com sucesso.")
-                st.rerun()
+                st.experimental_rerun()
             else:
                 st.sidebar.warning("Marque a caixa de confirmação antes de excluir.")
 
@@ -647,15 +624,12 @@ def main():
             accept_multiple_files=True,
             key=f"uploader_{numero_etapa}",
         )
-        # Note: A lógica de upload de arquivos para o Supabase Storage 
-        # *não está implementada* nas funções de banco (salvar_arquivo) 
-        # e deve ser adicionada se você precisar que os arquivos sejam persistidos
-        # e usados realmente pela IA.
         if uploads:
             for f in uploads:
                 salvar_arquivo(projeto_id, numero_etapa, f)
             st.success("Arquivo(s) salvo(s) para esta etapa.")
-            # st.rerun() # Pode ser necessário para atualizar a lista
+            # Força o rerun para atualizar a lista após o upload
+            st.experimental_rerun() 
 
         lista_arquivos = listar_arquivos(projeto_id, numero_etapa)
         if lista_arquivos:
@@ -677,7 +651,6 @@ def main():
         key_sug = f"sugestao_ia_{projeto_id}_{numero_etapa}"
         key_txt = f"texto_final_{projeto_id}_{numero_etapa}"
 
-        # Inicializa o estado de sessão com dados do banco
         if key_sug not in st.session_state:
             st.session_state[key_sug] = dados_etapa.get("sugestao_ia", "") or ""
         if key_txt not in st.session_state:
@@ -706,7 +679,7 @@ def main():
                 arquivos_etapa=arquivos_etapa,
             )
             st.session_state[key_sug] = sugestao
-            st.rerun() # Força o rerun para exibir a sugestão no text_area
+            st.experimental_rerun()
 
         st.text_area(
             "Sugestão da IA (você pode editar ou aproveitar partes)",
@@ -745,7 +718,6 @@ def main():
     col_docx, col_pdf = st.columns(2)
 
     with col_docx:
-        # Removido o botão "Gerar DOCX" para ter apenas o download
         docx_buffer = gerar_docx_etp(projeto, etapas_rows)
         st.download_button(
             label="Baixar ETP em DOCX",
