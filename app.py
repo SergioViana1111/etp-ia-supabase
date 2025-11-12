@@ -630,21 +630,7 @@ def tela_login_ou_cadastro():
                 else:
                     st.error(f"Erro ao autenticar: {msg}")
 
-        if col2.button("Esqueci minha senha"):
-            if not email:
-                st.info("Informe o e-mail acima e clique novamente.")
-            else:
-                try:
-                    supabase.auth.reset_password_email(
-                        email, {"redirect_to": APP_BASE_URL}
-                    )
-                    st.success(
-                        "Enviamos um e-mail com instruções para redefinir a senha."
-                    )
-                except Exception as e:
-                    st.error(
-                        f"Não foi possível enviar e-mail de redefinição: {e}"
-                    )
+        
 
     # --------- CADASTRAR (email/senha)
     with tabs[1]:
