@@ -347,22 +347,31 @@ def main():
 
     # Sidebar: projetos
     st.sidebar.header("Projetos de ETP")
-    projetos = listar_projetos()
-    options = ["(Novo projeto)"] + [f"{p['id']} - {p['nome']}" for p in projetos]
-    escolha = st.sidebar.selectbox("Selecione o projeto", options)
 
-    projeto_id = None
-    if escolha == "(Novo projeto)":
-        nome_novo = st.sidebar.text_input("Nome do novo projeto")
-        if st.sidebar.button("Criar projeto"):
-            if not nome_novo.strip():
-                st.warning("Informe o nome do projeto.")
-            else:
-                projeto_id = criar_projeto(nome_novo.strip())
-                st.success("Projeto criado com sucesso!")
-                st.rerun()
-    else:
-        projeto_id = int(escolha.split(" - ")[0])
+projetos = listar_projetos()
+nomes = [p["nome"] for p in projetos]
+ids = [p["id"] for p in projetos]
+
+escolha = st.sidebar.selectbox(
+    "Selecione o projeto",
+    ["(Novo projeto)"] + nomes
+)
+
+projeto_id = None
+if escolha == "(Novo projeto)":
+    nome_novo = st.sidebar.text_input("Nome do novo projeto")
+    if st.sidebar.button("Criar projeto"):
+        if not nome_novo.strip():
+            st.warning("Informe o nome do projeto.")
+        else:
+            projeto_id = criar_projeto(nome_novo.strip())
+            st.success("Projeto criado com sucesso!")
+            st.rerun()
+else:
+    # Mapeia o nome escolhido ao ID
+    idx = nomes.index(escolha)
+    projeto_id = ids[idx] if idx < len(ids) else None
+
 
     if not projeto_id:
         st.info("Crie ou selecione um projeto para começar.")
