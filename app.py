@@ -80,9 +80,21 @@ def listar_projetos():
     ).data or []
 
 def criar_projeto(nome: str):
+    # Recupera o ID do usuário autenticado
     user_id = st.session_state.get("auth_user_id")
     if not user_id:
-        raise Exception("Usuário não autenticado.")
+        # Tentativa de restaurar do token
+        token = st.session_state.get("access_token")
+        if token:
+            user_json = obter_user_supabase(token)
+            if user_json:
+                user_id = user_json.get("id")
+                st.session_state["auth_user_id"] = user_id
+    if not user_id:
+        st.error("Usuário não autenticado. Faça login novamente.")
+        st.stop()
+
+    # Inserção com user_id (RLS requer auth_token ativo)
     return (
         supabase.table("projetos")
         .insert({"nome": nome, "user_id": user_id})
@@ -269,6 +281,7 @@ def gerar_docx_etp(projeto, etapas_rows):
 # MAIN
 # ==========================
 def main():
+    # Recupera token de query (callback Google)
     params = st.experimental_get_query_params()
     access_tokens = params.get("access_token")
     if "usuario" not in st.session_state and access_tokens:
@@ -280,24 +293,34 @@ def main():
             st.session_state["access_token"] = token
             st.experimental_set_query_params()
 
+    # Se ainda não logou, mostra tela de login
     if "usuario" not in st.session_state:
         tela_login_ou_cadastro()
         return
 
+    # 🔐 Garante que o token está ativo para RLS
     token = st.session_state.get("access_token")
     if token:
-        supabase.postgrest.auth(token)  # ESSENCIAL para RLS
+        supabase.postgrest.auth(token)
+    else:
+        st.warning("Sessão expirada. Faça login novamente.")
+        st.session_state.clear()
+        st.rerun()
 
     usuario = st.session_state["usuario"]
+    user_id = st.session_state.get("auth_user_id")
+
     st.set_page_config(page_title="Ferramenta ETP", layout="wide")
     st.title("Ferramenta Inteligente para Elaboração de ETP")
 
-    st.sidebar.markdown(f"**Usuário:** {usuario.get('email')}")
+    # Sidebar: usuário e logout
+    st.sidebar.markdown(f"**Usuário:** {usuario.get('email','')}")
     if st.sidebar.button("Sair"):
         st.session_state.clear()
         st.experimental_set_query_params()
         st.rerun()
 
+    # Sidebar: projetos
     st.sidebar.header("Projetos de ETP")
     projetos = listar_projetos()
     options = ["(Novo projeto)"] + [f"{p['id']} - {p['nome']}" for p in projetos]
@@ -306,9 +329,13 @@ def main():
     projeto_id = None
     if escolha == "(Novo projeto)":
         nome_novo = st.sidebar.text_input("Nome do novo projeto")
-        if st.sidebar.button("Criar projeto") and nome_novo.strip():
-            projeto_id = criar_projeto(nome_novo.strip())
-            st.rerun()
+        if st.sidebar.button("Criar projeto"):
+            if not nome_novo.strip():
+                st.warning("Informe o nome do projeto.")
+            else:
+                projeto_id = criar_projeto(nome_novo.strip())
+                st.success("Projeto criado com sucesso!")
+                st.rerun()
     else:
         projeto_id = int(escolha.split(" - ")[0])
 
@@ -317,11 +344,17 @@ def main():
         return
 
     projeto = obter_projeto(projeto_id)
-    numero_etapa = st.sidebar.selectbox("Etapa", [n for n,_ in ETAPAS], format_func=lambda n: f"{n} - {dict(ETAPAS)[n]}")
+
+    # Etapas e conteúdos
+    numero_etapa = st.sidebar.selectbox(
+        "Etapa", [n for n, _ in ETAPAS],
+        format_func=lambda n: f"{n} - {dict(ETAPAS)[n]}"
+    )
     orientacao = ORIENTACOES.get(numero_etapa, "")
     dados_etapa = carregar_etapa(projeto_id, numero_etapa)
 
-    col1, col2 = st.columns([1,2])
+    # Layout principal
+    col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("Informações básicas")
         dados_infos = {}
@@ -330,15 +363,16 @@ def main():
             dados_infos[key] = st.text_input(label, value=valor, key=f"info_{key}")
         if st.button("Salvar informações básicas"):
             atualizar_infos_basicas(projeto_id, dados_infos)
-            st.success("Salvo!")
+            st.success("Informações salvas!")
 
     with col2:
         st.subheader(f"Etapa {numero_etapa}")
-        st.write(orientacao)
+        st.caption(orientacao)
         st.text_area("Sugestão IA", key="sug", value=dados_etapa.get("sugestao_ia") or "", height=200)
         st.text_area("Texto Final", key="txt", value=dados_etapa.get("texto_final") or "", height=300)
         if st.button("Salvar Etapa"):
-            salvar_etapa(projeto_id, numero_etapa, dict(ETAPAS)[numero_etapa], st.session_state["txt"], st.session_state["sug"])
+            salvar_etapa(projeto_id, numero_etapa, dict(ETAPAS)[numero_etapa],
+                         st.session_state["txt"], st.session_state["sug"])
             st.success("Etapa salva!")
 
 if __name__ == "__main__":
