@@ -305,27 +305,46 @@ def tela_login_google():
 
 
 def mover_access_token_do_hash_para_query():
-    """Converte #access_token=... para ?access_token=... e recarrega."""
+    """
+    Converte #access_token=... (fragment) para ?access_token=...
+    Compatível com Streamlit Cloud — executa repetidamente até mover o token.
+    """
     components.html(
         """
+        <html>
+        <body></body>
         <script>
-        (function() {
+        function tryConvert() {
             if (window.location.hash && window.location.hash.includes("access_token=")) {
-                const params = new URLSearchParams(window.location.hash.substring(1));
-                const access = params.get("access_token");
-                if (access) {
-                    const url = new URL(window.location.href);
-                    url.hash = "";
-                    url.searchParams.set("access_token", access);
-                    window.location.replace(url.toString());
+                const hash = window.location.hash.substring(1);
+                const params = new URLSearchParams(hash);
+                const accessToken = params.get("access_token");
+                if (accessToken) {
+                    const newUrl = new URL(window.location.href);
+                    newUrl.hash = "";
+                    newUrl.search = params.toString();
+                    window.location.replace(newUrl.toString());
+                    return true;
                 }
             }
-        })();
-        </script>
-        """,
-        height=40,  # precisa ter altura > 0 no Streamlit Cloud
-    )
+            return false;
+        }
 
+        // tenta imediatamente
+        if (!tryConvert()) {
+            // tenta no load
+            window.addEventListener("load", tryConvert);
+            // tenta a cada 100ms por até 3 segundos
+            let tries = 0;
+            const interval = setInterval(() => {
+                if (tryConvert() || tries++ > 30) clearInterval(interval);
+            }, 100);
+        }
+        </script>
+        </html>
+        """,
+        height=100,  # precisa ter altura > 0
+    )
 
 
 # =====================================================
