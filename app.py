@@ -275,17 +275,7 @@ def gerar_texto_ia(numero_etapa, nome_etapa, orientacao, texto_existente, infos_
     if not api_key:
         return "⚠️ OPENAI_API_KEY não configurada."
     client = OpenAI(api_key=api_key)
-    # Aqui o código original usa 'client.responses.create', mas o SDK atualizado usa 'client.chat.completions.create'
-    # Vamos manter a estrutura original se for um SDK legado, mas para um código moderno, seria assim:
-    # r = client.chat.completions.create(
-    #     model="gpt-4-turbo", # Modelo atualizado
-    #     messages=[
-    #         {"role": "user", "content": user_prompt}
-    #     ]
-    # )
-    # out = r.choices[0].message.content or ""
-
-    # Mantendo a estrutura do código original para evitar quebras
+    
     user_prompt = f"""
 Etapa {numero_etapa} – {nome_etapa}
 Orientações: {orientacao}
@@ -293,6 +283,7 @@ Texto atual: {texto_existente or '[vazio]'}
 Arquivos: {', '.join(a['nome_original'] for a in arquivos_etapa) if arquivos_etapa else 'nenhum'}
 """
     try:
+        # Manter a estrutura do código original para evitar quebras de versão de SDK
         r = client.responses.create(
             model="gpt-5",
             input=[{"role": "user", "content": user_prompt}]
@@ -365,7 +356,11 @@ def main():
     st.sidebar.header("Projetos de ETP")
     projetos = listar_projetos()
     options = ["(Novo projeto)"] + [f"{p['id']} - {p['nome']}" for p in projetos]
-    escolha = st.sidebar.selectbox("Selecione o projeto", options)
+    
+    # Armazena a escolha anterior para detectar mudança
+    escolha_anterior = st.session_state.get("projeto_selecionado_str")
+    
+    escolha = st.sidebar.selectbox("Selecione o projeto", options, key="projeto_selecionado_str")
 
     projeto_id = None
     if escolha == "(Novo projeto)":
@@ -376,9 +371,25 @@ def main():
             else:
                 projeto_id = criar_projeto(nome_novo.strip())
                 st.success("Projeto criado com sucesso!")
+                
+                # 💡 NOVA CORREÇÃO: Limpar o estado da sessão após criar um novo projeto
+                # Isso impede que os inputs do novo projeto herdem o cache do projeto anterior.
+                for key, _ in INFOS_BASICAS_CAMPOS:
+                    if f"info_{key}" in st.session_state:
+                        del st.session_state[f"info_{key}"]
+                        
+                # Define a nova escolha para recarregar o projeto recém-criado
+                st.session_state["projeto_selecionado_str"] = f"{projeto_id} - {nome_novo.strip()}"
                 st.rerun()
     else:
         projeto_id = int(escolha.split(" - ")[0])
+    
+    # 💡 NOVA CORREÇÃO: Limpar o estado da sessão se o projeto selecionado mudou
+    if projeto_id and escolha != escolha_anterior:
+        for key, _ in INFOS_BASICAS_CAMPOS:
+            if f"info_{key}" in st.session_state:
+                del st.session_state[f"info_{key}"]
+        st.rerun() # Força a recarga para carregar os novos valores nos inputs
 
     if not projeto_id:
         st.info("Crie ou selecione um projeto para começar.")
@@ -398,18 +409,18 @@ def main():
     col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("Informações básicas")
-        # 💡 CORREÇÃO APLICADA AQUI: Apenas renderiza os inputs, usando a chave
-        # para que os valores sejam armazenados no st.session_state.
+        
+        # Renderiza os campos de input
         for key, label in INFOS_BASICAS_CAMPOS:
             valor = projeto.get(key) or ""
-            st.text_input(label, value=valor, key=f"info_{key}") # Valor lido é armazenado em st.session_state[f"info_{key}"]
+            # A chave é única para o tipo de informação
+            st.text_input(label, value=valor, key=f"info_{key}") 
             
         if st.button("Salvar informações básicas"):
-            # 💡 Ao clicar, lemos os valores *mais recentes* diretamente do st.session_state.
-            # Isso garante que apenas os dados do projeto atual sejam coletados e salvos.
+            # Ao clicar, lemos os valores *mais recentes* diretamente do st.session_state.
             dados_para_salvar = {}
             for key, _ in INFOS_BASICAS_CAMPOS:
-                # Coleta o valor atual digitado pelo usuário
+                # Coleta o valor atual digitado pelo usuário (que está no st.session_state[f"info_{key}"])
                 dados_para_salvar[key] = st.session_state.get(f"info_{key}")
 
             # Salva *apenas* no projeto_id selecionado
