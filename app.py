@@ -10,6 +10,7 @@ from docx import Document
 from openai import OpenAI
 from supabase import create_client, Client
 import pypandoc
+import streamlit.components.v1 as components
 
 
 # 🔹 Corrige o retorno do OAuth — move o #access_token para ?access_token
